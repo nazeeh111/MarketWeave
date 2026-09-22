@@ -42,7 +42,7 @@
   },
   "keywords": [],
   "author": "nazeeh111",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@buidlrrr/rain-sdk": "^2.0.0",

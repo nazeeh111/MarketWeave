@@ -8,12 +8,14 @@ version = "2.18.0"
 description = "SDK for supported prediction markets with hosted services and local sidecar access"
 readme = "README.md"
 requires-python = ">=3.8"
+license = {text = "MIT"}
 authors = [
     {name = "nazeeh111"}
 ]
 keywords = ["prediction markets", "polymarket", "kalshi", "trading", "api"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",

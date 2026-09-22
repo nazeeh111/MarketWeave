@@ -87,3 +87,7 @@ npm test --workspace=pmxt-core -- --runInBand test/normalizers
 ```
 
 The normalizer checks use recorded inputs. Live exchange and account tests are separate and require their own environment. Publication, tagging and cross-repository synchronization are manual; no inherited automation runs from this repository.
+
+## Licensing
+
+The existing [project license](LICENSE), [core license](core/LICENSE), and separate third-party notices remain in effect. Repository publication history is separate from source authorship.
