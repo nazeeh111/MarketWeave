@@ -90,4 +90,4 @@ The normalizer checks use recorded inputs. Live exchange and account tests are s
 
 ## Licensing
 
-The existing [project license](LICENSE), [core license](core/LICENSE), and separate third-party notices remain in effect. Repository publication history is separate from source authorship.
+First-party source is available under the [MIT project license](LICENSE) and [MIT core license](core/LICENSE), held by nazeeh111. Separately owned dependency notices remain in effect.
