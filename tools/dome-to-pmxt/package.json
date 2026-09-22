@@ -1,0 +1,28 @@
+{
+  "name": "dome-to-pmxt",
+  "version": "1.0.0",
+  "description": "Automatic codemod to migrate DomeAPI code to pmxt (TypeScript and Python)",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "dome-to-pmxt": "index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "domeapi",
+    "pmxt",
+    "codemod",
+    "migration",
+    "polymarket",
+    "kalshi"
+  ],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nazeeh111/MarketWeave.git",
+    "directory": "tools/dome-to-pmxt"
+  },
+  "homepage": "https://github.com/nazeeh111/MarketWeave/tree/main/tools/dome-to-pmxt"
+}
