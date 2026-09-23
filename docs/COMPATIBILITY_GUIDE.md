@@ -157,7 +157,7 @@ print(f"Order status: {order.status}")
 
 ### Self-hosted trading (advanced)
 
-Use this when you self-host the local server. See [Self-hosted](#self-hosted) for setup. You provide venue credentials directly — no `pmxt_api_key` required. For detailed credential setup instructions, see the exchange-specific guides: [Polymarket](core/docs/SETUP_POLYMARKET.md), [Kalshi](core/docs/SETUP_KALSHI.md), [Limitless](core/docs/SETUP_LIMITLESS.md).
+Use this when you self-host the local server. See [Self-hosted](#self-hosted) for setup. You provide venue credentials directly — no `pmxt_api_key` required. For detailed credential setup instructions, see the exchange-specific guides: [Polymarket](../core/docs/SETUP_POLYMARKET.md), [Kalshi](../core/docs/SETUP_KALSHI.md), [Limitless](../core/docs/SETUP_LIMITLESS.md).
 
 #### Polymarket
 ```python

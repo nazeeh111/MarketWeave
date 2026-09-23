@@ -1,12 +1,14 @@
 # MarketWeave
 
-**Development history:** Developed locally before publication. These repositories were uploaded together, so their GitHub publication dates do not indicate when development began.
+**Development history:** Developed locally using Git before publication. These projects were published to GitHub together, so similar upload dates do not indicate when development began.
 
 ![MarketWeave: one interface, many markets](docs/marketweave-banner.svg)
 
 A common interface for prediction-market data, order books, execution estimates and supported venue operations. MarketWeave brings the TypeScript core, Python SDK and command-line tools into one source workspace.
 
 ## Start with the source
+
+Use Node.js 18 or later, npm, and Java 11 or later with `node`, `npm`, and `java` available on your PATH. The SDK generation command runs OpenAPI Generator through Java and downloads its pinned generator on first use.
 
 ```sh
 git clone https://github.com/nazeeh111/MarketWeave.git

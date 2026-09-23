@@ -1,7 +1,5 @@
 # MarketWeave contribution guide
 
-If you contribute, you'll get the Contributor rank on the Discord!
-
 Welcome! We love contributors. This project is a monorepo setup to support multiple languages while keeping the core logic centralized.
 
 ## Repository Structure
@@ -14,6 +12,7 @@ Welcome! We love contributors. This project is a monorepo setup to support multi
 
 - **Node.js >= 18** (20+ recommended; used in CI)
 - **npm** (comes with Node.js)
+- **Java >= 11** on PATH for OpenAPI SDK generation
 
 ## Monorepo Basics
 
