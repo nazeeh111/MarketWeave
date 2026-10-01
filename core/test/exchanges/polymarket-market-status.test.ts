@@ -25,7 +25,7 @@ const parent: PolymarketRawEvent = {
 describe('Polymarket empty later search pages', () => {
     // The primary search response permits nullable/omitted events. A later
     // empty page must not crash normalization or discard another planned page.
-    function pagedExchange(empty: 'null' | 'missing' | 'array', rejectPage = false) {
+    function pagedExchange(empty: 'null' | 'missing' | 'array' | 'null-body' | 'missing-body', rejectPage = false) {
         const event = (id: string): PolymarketRawEvent => ({
             id: `event-${id}`, slug: `event-${id}`, title: `Signal ${id}`,
             active: true, closed: false, markets: [{
@@ -36,7 +36,8 @@ describe('Polymarket empty later search pages', () => {
         });
         const raw = deepFreeze([
             { events: [event('710')], pagination: { hasMore: true, totalResults: 101 } },
-            { ...(empty === 'null' ? { events: null } : empty === 'array' ? { events: [] } : {}),
+            empty === 'null-body' ? null : empty === 'missing-body' ? undefined : {
+                ...(empty === 'null' ? { events: null } : empty === 'array' ? { events: [] } : {}),
                 pagination: { hasMore: true, totalResults: 101 } },
             { events: [event('730')], pagination: { hasMore: false, totalResults: 101 } },
         ]);
@@ -78,6 +79,17 @@ describe('Polymarket empty later search pages', () => {
             ? exchange.fetchMarkets({ query: 'Signal' })
             : exchange.fetchEvents({ query: 'Signal' });
         await expect(result).rejects.toBe(failure);
+    });
+
+    it.each([
+        ['markets', 'null-body'], ['markets', 'missing-body'],
+        ['events', 'null-body'], ['events', 'missing-body'],
+    ] as const)('%s search rejects a %s instead of returning partial results', async (kind, empty) => {
+        const { exchange } = pagedExchange(empty);
+        const result = kind === 'markets'
+            ? exchange.fetchMarkets({ query: 'Signal' })
+            : exchange.fetchEvents({ query: 'Signal' });
+        await expect(result).rejects.toBeInstanceOf(TypeError);
     });
 });
 

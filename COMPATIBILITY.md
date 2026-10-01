@@ -34,7 +34,7 @@ The [Gamma search reference](https://docs.polymarket.com/api-reference/search/se
 
 ## Polymarket empty search pages
 
-Later search pages with null or omitted `events` now contribute an empty list, as the first page already does. Previously these values entered the combined result and crashed market normalization or event filtering. Results from other planned pages retain their order; a failed request still rejects the search. Search predicates, page selection, caps and public offset/limit behavior are unchanged.
+Later search pages with null or omitted `events` now contribute an empty list, as the first page already does. Previously these values entered the combined result and crashed market normalization or event filtering. Results from other planned pages retain their order; a failed request or null/absent response body still rejects the search. Search predicates, page selection, caps and public offset/limit behavior are unchanged.
 
 The [Gamma search response reference](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles) permits a nullable event list. Controlled responses verify this case through both public search methods; they do not establish successful current live provider access or complete catalog coverage.
 
