@@ -38,6 +38,12 @@ Later search pages with null or omitted `events` now contribute an empty list, a
 
 The [Gamma search response reference](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles) permits a nullable event list. Controlled responses verify this case through both public search methods; they do not establish successful current live provider access or complete catalog coverage.
 
+## Polymarket search continuation without a total
+
+When the first page reports `hasMore: true` but omits `totalResults` or sets it to null, both public search methods now reject with the existing non-retryable `NotSupported` error. Previously the client treated the missing total as zero and returned only the first page, or an empty result. The guard runs before the empty-first-page return and makes no additional requests. Terminal pages without a total remain accepted; counted pagination and its later pages are unchanged.
+
+The included provider schema permits an omitted total. This is an unsupported continuation state in this client, rather than a claim that an omitted total violates the provider schema. A complete fallback still needs verified pagination semantics and a resource policy; no sequential crawl or catalog-completeness claim is introduced. Other existing pagination limitations remain.
+
 ## Original publication verification
 
 - Core TypeScript build: passed.

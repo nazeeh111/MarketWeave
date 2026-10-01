@@ -1,4 +1,5 @@
 import { UnifiedMarket, MarketOutcome, CandleInterval } from '../../types';
+import { NotSupported } from '../../errors';
 import { addBinaryOutcomes } from '../../utils/market-utils';
 import { buildSourceMetadata } from '../../utils/metadata';
 import { logger } from '../../utils/logger';
@@ -229,6 +230,10 @@ export async function paginateSearchParallel(url: string, params: any, maxResult
     const data = firstPageResponse.data;
     const firstPageEvents = data.events || [];
     const pagination = data.pagination;
+
+    if (pagination?.hasMore === true && pagination.totalResults == null) {
+        throw new NotSupported('Polymarket search cannot continue without totalResults; partial results are not returned.', 'polymarket');
+    }
 
     // If no more pages, return what we have
     if (!pagination?.hasMore || firstPageEvents.length === 0) {

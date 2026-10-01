@@ -363,3 +363,68 @@ describe('Polymarket newest discovery ordering', () => {
         expect((await exchange.fetchMarkets({ sort })).map(m => m.id)).toEqual(expected);
     });
 });
+
+
+describe('Polymarket search without a total count', () => {
+    function searchExchange(events: 'nonempty' | 'empty' | 'null' | 'omitted', hasMore: boolean, total?: number | null) {
+        const first = {
+            ...(events === 'omitted' ? {} : { events: events === 'nonempty' ? [parent] : events === 'null' ? null : [] }),
+            pagination: { hasMore, ...(total === undefined ? {} : { totalResults: total }) },
+        };
+        const last = { ...parent, id: 'last-parent', markets: [{ ...children[4], id: '810', question: 'Signal last' }] };
+        // Only the first page supplies the total for the counted control.
+        const raw = deepFreeze([first, { events: null }, { events: [last] }]);
+        const exchange = new PolymarketExchange();
+        const http = (exchange as unknown as { http: AxiosInstance }).http;
+        const requests: Array<Record<string, any>> = [];
+        http.defaults.adapter = async config => {
+            if (config.method !== 'get' || new URL(config.url!).pathname !== '/public-search'
+                || ![1, 2, 3].includes(config.params.page) || requests.length >= 3) {
+                throw new Error('Bounded search count transport guard');
+            }
+            requests.push(config.params);
+            return { status: 200, statusText: 'OK', headers: {}, config, data: raw[config.params.page - 1] };
+        };
+        return { exchange, requests, raw };
+    }
+
+    it.each([
+        ['markets', 'nonempty'], ['markets', 'empty'], ['markets', 'null'], ['markets', 'omitted'],
+        ['events', 'nonempty'], ['events', 'empty'], ['events', 'null'], ['events', 'omitted'],
+    ] as const)('%s search refuses unsupported continuation with %s first events and no total', async (kind, events) => {
+        const { exchange, requests, raw } = searchExchange(events, true);
+        const before = JSON.stringify(raw);
+        const result = kind === 'markets' ? exchange.fetchMarkets({ query: 'Signal' }) : exchange.fetchEvents({ query: 'Signal' });
+        await expect(result).rejects.toMatchObject({ name: 'NotSupported', code: 'NOT_SUPPORTED', status: 501, retryable: false, exchange: 'polymarket' });
+        expect(requests.map(p => p.page)).toEqual([1]);
+        expect(JSON.stringify(raw)).toBe(before);
+    });
+
+    it.each(['markets', 'events'] as const)('%s search refuses continuation with a null total instead of returning partial results', async kind => {
+        const { exchange, requests } = searchExchange('nonempty', true, null);
+        const result = kind === 'markets' ? exchange.fetchMarkets({ query: 'Signal' }) : exchange.fetchEvents({ query: 'Signal' });
+        await expect(result).rejects.toMatchObject({ name: 'NotSupported', code: 'NOT_SUPPORTED', retryable: false });
+        expect(requests.map(p => p.page)).toEqual([1]);
+    });
+
+    it.each(['markets', 'events'] as const)('%s search still accepts a terminal page without a total', async kind => {
+        const { exchange, requests } = searchExchange('nonempty', false);
+        const ids = kind === 'markets'
+            ? (await exchange.fetchMarkets({ query: 'Signal' })).map(m => m.id)
+            : (await exchange.fetchEvents({ query: 'Signal' })).map(e => e.id);
+        expect(ids).toEqual(kind === 'markets' ? ['101', '102'] : ['event-status']);
+        expect(requests.map(p => p.page)).toEqual([1]);
+    });
+
+    it.each(['markets', 'events'] as const)('%s counted search retains planned later pages without their pagination metadata', async kind => {
+        const { exchange, requests, raw } = searchExchange('nonempty', true, 101);
+        const before = JSON.stringify(raw);
+        const ids = kind === 'markets'
+            ? (await exchange.fetchMarkets({ query: 'Signal', sort: 'newest', offset: 2, limit: 1 })).map(m => m.id)
+            : (await exchange.fetchEvents({ query: 'Signal', sort: 'newest' })).map(e => e.id);
+        expect(ids).toEqual(kind === 'markets' ? ['810'] : ['event-status', 'last-parent']);
+        expect(requests.map(p => p.page)).toEqual([1, 2, 3]);
+        expect(requests.every(p => p.q === 'Signal' && p.sort === 'startDate' && p.events_status === 'active')).toBe(true);
+        expect(JSON.stringify(raw)).toBe(before);
+    });
+});
