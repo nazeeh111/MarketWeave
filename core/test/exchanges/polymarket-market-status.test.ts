@@ -166,3 +166,64 @@ describe('Polymarket public market lifecycle filtering', () => {
         });
     });
 });
+
+describe('Polymarket newest discovery ordering', () => {
+    function orderedDiscovery(status?: MarketFilterParams['status'], rejectedChild = false) {
+        const closed = status === 'closed' || status === 'inactive';
+        const child = (id: string, volume24hr: number, liquidity: number): PolymarketRawMarket => ({
+            id, question: `Order ${id}`, active: !closed, closed, archived: false,
+            volume24hr, liquidity, outcomes: '["Yes","No"]',
+            clobTokenIds: JSON.stringify([`${id}1`, `${id}2`]), endDate: '2030-01-01T00:00:00Z',
+        });
+        const first = child('310', 1, 100);
+        const raw = deepFreeze([
+            { id: 'new-parent', slug: 'new-parent', title: 'Newest parent',
+                startDate: '2026-10-01T00:00:00Z', active: !closed, closed,
+                markets: rejectedChild ? [{ ...child('399', 999, 999), archived: true }, first] : [first] },
+            { id: 'old-parent', slug: 'old-parent', title: 'Older parent',
+                startDate: '2020-01-01T00:00:00Z', active: !closed, closed,
+                markets: [child('320', 100, 1)] },
+        ]);
+        const exchange = new PolymarketExchange();
+        const http = (exchange as unknown as { http: AxiosInstance }).http;
+        const requests: Array<Record<string, unknown>> = [];
+        http.defaults.adapter = async config => {
+            if (config.method !== 'get' || new URL(config.url!).pathname !== '/events' || requests.length > 0) {
+                throw new Error('One-request discovery transport guard');
+            }
+            requests.push(config.params);
+            return { status: 200, statusText: 'OK', headers: {}, config, data: raw };
+        };
+        return { exchange, requests, raw };
+    }
+
+    it.each([undefined, 'active', 'closed', 'inactive', 'all'] as const)(
+        'newest status %p keeps returned parent date order before limit', async status => {
+            const { exchange, requests } = orderedDiscovery(status);
+            const params = { sort: 'newest' as const, limit: 1, ...(status === undefined ? {} : { status }) };
+            expect((await exchange.fetchMarkets(params)).map(m => m.id)).toEqual(['310']);
+            expect(requests).toHaveLength(1);
+            expect(requests[0]).toMatchObject({ order: 'startDate', ascending: 'false' });
+        },
+    );
+
+    it('filters raw child status without changing newest order or raw bytes', async () => {
+        const { exchange, raw } = orderedDiscovery(undefined, true);
+        const before = JSON.stringify(raw);
+        expect((await exchange.fetchMarkets({ sort: 'newest', limit: 1 })).map(m => m.id)).toEqual(['310']);
+        expect(JSON.stringify(raw)).toBe(before);
+    });
+
+    it('keeps newest order before the public offset and limit', async () => {
+        const { exchange } = orderedDiscovery();
+        expect((await exchange.fetchMarkets({ sort: 'newest', offset: 1, limit: 1 })).map(m => m.id)).toEqual(['320']);
+    });
+
+    it.each([
+        ['volume', ['320', '310']],
+        ['liquidity', ['310', '320']],
+    ] as const)('preserves explicit %s ranking', async (sort, expected) => {
+        const { exchange } = orderedDiscovery();
+        expect((await exchange.fetchMarkets({ sort })).map(m => m.id)).toEqual(expected);
+    });
+});
