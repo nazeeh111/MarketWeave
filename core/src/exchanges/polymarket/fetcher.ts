@@ -412,12 +412,14 @@ export class PolymarketFetcher implements IExchangeFetcher<PolymarketRawEvent, P
 
     private async fetchRawMarketsSearch(params: MarketFilterParams): Promise<PolymarketRawEvent[]> {
         const limit = params?.limit || 250000;
+        const sortParam = params.sort === 'newest' ? 'startDate'
+            : params.sort === 'liquidity' ? 'liquidity' : 'volume';
 
         const queryParams: Record<string, any> = {
             q: params.query,
             limit_per_type: 50,
             events_status: params?.status === 'all' ? undefined : (params?.status === 'inactive' || params?.status === 'closed' ? 'closed' : 'active'),
-            sort: 'volume',
+            sort: sortParam,
             ascending: false,
         };
 

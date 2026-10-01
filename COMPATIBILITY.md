@@ -1,6 +1,6 @@
 # MarketWeave compatibility notes
 
-The original publication preserved the existing computational interfaces, package and command names, exchange identifiers, transport routes, hosted endpoints, user-agent values, schemas and error messages while changing repository identity and documentation styling. The later corrections below change market filtering, outcome lookup, missing-parent titles and newest ordering, and reject invalid status values. Public names and schemas remain unchanged.
+The original publication preserved the existing computational interfaces, package and command names, exchange identifiers, transport routes, hosted endpoints, user-agent values, schemas and error messages while changing repository identity and documentation styling. The later corrections below change market filtering, outcome lookup, missing-parent titles and discovery/search sorting, and reject invalid status values. Public names and schemas remain unchanged.
 
 ## Implementation boundary
 
@@ -25,6 +25,12 @@ These changes were checked through the actual public class with controlled trans
 ## Polymarket newest discovery
 
 For non-search discovery, `sort: "newest"` preserves the returned parent order from Gamma's existing descending `startDate` request after child filtering and before the public offset/limit. Previously, client-side volume sorting overwrote that date order. This describes ordering within the fetched parent responses, not a global ranking of individual market creation dates. Default volume ranking and explicit volume/liquidity ranking are unchanged. Search, direct lookup, outcome lookup and parent retrieval behavior are unchanged by this ordering correction.
+
+## Polymarket market search sorting
+
+Market query search now uses the same sort translation as the existing event-search path: `newest` sends `startDate`, `liquidity` sends `liquidity`, and omitted/explicit volume sends `volume`, always descending. Previously market search sent volume regardless of the selection. The existing parent/child response order is retained through status and text filtering before public offset/limit, with the chosen sort forwarded to every search page. This is parent-response ordering within the existing retrieval window, not global ranking of individual markets.
+
+The [Gamma search reference](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles) defines string `sort` and boolean `ascending` without enumerating accepted sort values. These translations reuse the client’s existing event-search convention. Controlled transport cases verify outgoing parameters and returned ordering; current successful live acceptance remains unverified after the earlier HTTP 403. Search status predicates, child retention, page expansion, higher-priority selectors and non-search discovery are unchanged.
 
 ## Original publication verification
 
