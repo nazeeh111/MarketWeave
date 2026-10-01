@@ -42,6 +42,7 @@ import { logger } from '../../utils/logger';
 import { polymarketErrorMapper } from './errors';
 import { PolymarketFetcher } from './fetcher';
 import { PolymarketNormalizer } from './normalizer';
+import { marketHasClobTokenId } from './utils';
 import {
     PolymarketWebSocket, PolymarketWebSocketConfig,
     UserChannelCallback, UserChannelEvent, PolymarketUserChannelCreds,
@@ -629,17 +630,19 @@ export class PolymarketExchange extends PredictionMarketExchange {
         for (const event of rawEvents) {
             // Gamma filters parent events, whose children can have different lifecycles.
             // Filter raw child flags before normalization, sorting and result limits.
-            const filteredEvent = status === 'all' ? event : {
+            const filteredEvent = status === 'all' && !params?.outcomeId ? event : {
                 ...event,
-                markets: event.markets?.filter(market => status === 'active'
-                    ? market.active === true && market.closed !== true && market.archived !== true
-                    : market.closed === true),
+                markets: event.markets?.filter(market =>
+                    (!params?.outcomeId || marketHasClobTokenId(market, params.outcomeId)) &&
+                    (status === 'all' || (status === 'active'
+                        ? market.active === true && market.closed !== true && market.archived !== true
+                        : market.closed === true))),
             };
             const markets = this.normalizer.normalizeMarketsFromEvent(filteredEvent, { useQuestionAsCandidateFallback: useQuestionFallback });
             unifiedMarkets.push(...markets);
         }
 
-        // For outcomeId filtering (no direct API, fetch and filter)
+        // Retain exact outcome filtering after raw token membership validation.
         if (params?.outcomeId) {
             return unifiedMarkets.filter(m =>
                 m.outcomes.some(o => o.outcomeId === params.outcomeId),

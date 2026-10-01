@@ -32,22 +32,24 @@ function deepFreeze<T>(value: T): T {
 
 function exchangeWithResponse(params: MarketFilterParams = {}): { exchange: PolymarketExchange; raw: unknown; requests: Array<{ params: unknown }> } {
     const market = children.find(m => m.id === params.marketId || m.slug === params.slug);
+    const outcomeLookup = !!(params.outcomeId && !params.marketId && !params.slug && !params.eventId && !params.query);
     const raw = deepFreeze(JSON.parse(JSON.stringify(
         params.marketId ? [{ ...market, events: [{ ...parent, markets: undefined }] }]
             : params.slug ? { ...market, events: [{ ...parent, markets: undefined }] }
                 : params.query ? { events: [parent], pagination: { hasMore: false } }
-                    : [parent],
+                    : outcomeLookup ? [{ ...children[0], events: [{ ...parent, markets: undefined }] }]
+                        : [parent],
     )));
     const exchange = new PolymarketExchange();
     const http = (exchange as unknown as { http: AxiosInstance }).http;
     const requests: Array<{ params: unknown }> = [];
     http.defaults.adapter = async config => {
         requests.push({ params: config.params });
-        if (requests.length > 1 || config.method !== 'get') throw new Error('Read-only one-request transport guard');
+        if (requests.length > (outcomeLookup ? 2 : 1) || config.method !== 'get') throw new Error('Read-only bounded transport guard');
         const pathname = new URL(config.url!).pathname;
-        const expectedPath = params.marketId ? '/markets' : params.slug ? `/markets/slug/${params.slug}` : params.query ? '/public-search' : '/events';
+        const expectedPath = params.marketId || outcomeLookup ? '/markets' : params.slug ? `/markets/slug/${params.slug}` : params.query ? '/public-search' : '/events';
         if (pathname !== expectedPath) throw new Error(`Unexpected fixture route: ${pathname}`);
-        return { status: 200, statusText: 'OK', headers: {}, config, data: raw };
+        return { status: 200, statusText: 'OK', headers: {}, config, data: outcomeLookup && config.params.closed === true ? [] : raw };
     };
     return { exchange, raw, requests };
 }
@@ -141,11 +143,14 @@ describe('Polymarket public market lifecycle filtering', () => {
         expect(events[0].markets.map(m => m.id)).toEqual(['103', '104', '105', '106', '101', '102']);
     });
 
-    it('omitted-status outcome ID lookup retains active-parent discovery without extra child exclusion', async () => {
+    it('omitted-status outcome ID lookup reads both market partitions without extra child exclusion', async () => {
         const params = { outcomeId: '1031' };
         const { exchange, requests } = exchangeWithResponse(params);
         expect((await exchange.fetchMarkets(params)).map(m => m.id)).toEqual(['103']);
-        expect(requests[0].params).toMatchObject({ active: 'true', closed: 'false' });
+        expect(requests.map(r => r.params)).toEqual([
+            { clob_token_ids: ['1031'], closed: false },
+            { clob_token_ids: ['1031'], closed: true },
+        ]);
     });
 
     it.each(['closed', 'inactive'] as const)('%s discovery retains closed-parent retrieval predicates', async status => {

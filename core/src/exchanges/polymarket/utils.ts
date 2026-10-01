@@ -29,6 +29,19 @@ export const GAMMA_SEARCH_URL = process.env.POLYMARKET_GAMMA_SEARCH_URL || 'http
 export const CLOB_API_URL = process.env.POLYMARKET_CLOB_URL || 'https://clob.polymarket.com';
 export const DATA_API_URL = process.env.POLYMARKET_DATA_URL || 'https://data-api.polymarket.com';
 
+export function marketHasClobTokenId(market: any, outcomeId: string): boolean {
+    if (!market || typeof market !== 'object') return false;
+    let tokens: unknown = market.clobTokenIds;
+    if (typeof tokens === 'string') {
+        try {
+            tokens = JSON.parse(tokens);
+        } catch {
+            return false;
+        }
+    }
+    return Array.isArray(tokens) && tokens.some(token => typeof token === 'string' && token === outcomeId);
+}
+
 export function mapMarketToUnified(event: any, market: any, options: { useQuestionAsCandidateFallback?: boolean } = {}): UnifiedMarket | null {
     if (!market) return null;
 
@@ -114,7 +127,7 @@ export function mapMarketToUnified(event: any, market: any, options: { useQuesti
         id: market.id,
         marketId: market.id,
         eventId: event.id || event.slug,
-        title: market.question ? `${event.title} - ${market.question}` : event.title,
+        title: market.question ? (event.title ? `${event.title} - ${market.question}` : market.question) : event.title,
         description: market.description || event.description,
         slug: typeof market.slug === 'string' && market.slug.length > 0 ? market.slug : undefined,
         outcomes: outcomes,
