@@ -1,7 +1,5 @@
 # MarketWeave
 
-**Development history:** Developed locally using Git before publication. These projects were published to GitHub together, so similar upload dates do not indicate when development began.
-
 ![MarketWeave: one interface, many markets](docs/marketweave-banner.svg)
 
 A common interface for prediction-market data, order books, execution estimates and supported venue operations. MarketWeave brings the TypeScript core, Python SDK and command-line tools into one source workspace.
