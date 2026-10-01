@@ -32,6 +32,12 @@ Market query search now uses the same sort translation as the existing event-sea
 
 The [Gamma search reference](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles) defines string `sort` and boolean `ascending` without enumerating accepted sort values. These translations reuse the client’s existing event-search convention. Controlled transport cases verify outgoing parameters and returned ordering; current successful live acceptance remains unverified after the earlier HTTP 403. Search status predicates, child retention, page expansion, higher-priority selectors and non-search discovery are unchanged.
 
+## Polymarket empty search pages
+
+Later search pages with null or omitted `events` now contribute an empty list, as the first page already does. Previously these values entered the combined result and crashed market normalization or event filtering. Results from other planned pages retain their order; a failed request or null/absent response body still rejects the search. Search predicates, page selection, caps and public offset/limit behavior are unchanged.
+
+The [Gamma search response reference](https://docs.polymarket.com/api-reference/search/search-markets-events-and-profiles) permits a nullable event list. Controlled responses verify this case through both public search methods; they do not establish successful current live provider access or complete catalog coverage.
+
 ## Original publication verification
 
 - Core TypeScript build: passed.
