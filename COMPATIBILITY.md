@@ -1,6 +1,6 @@
 # MarketWeave compatibility notes
 
-The original publication preserved the existing computational interfaces, package and command names, exchange identifiers, transport routes, hosted endpoints, user-agent values, schemas and error messages while changing repository identity and documentation styling. The later corrections below change market filtering, outcome lookup and missing-parent titles, and reject invalid status values. Public names and schemas remain unchanged.
+The original publication preserved the existing computational interfaces, package and command names, exchange identifiers, transport routes, hosted endpoints, user-agent values, schemas and error messages while changing repository identity and documentation styling. The later corrections below change market filtering, outcome lookup, missing-parent titles and newest ordering, and reject invalid status values. Public names and schemas remain unchanged.
 
 ## Implementation boundary
 
@@ -21,6 +21,10 @@ Raw `clobTokenIds` must contain the exact requested string, as an array or JSON-
 When the parent title is absent, the market question supplies the title. This corrects the former `undefined - Question` title and binary labels derived from it. Existing titled-parent prefixes, question/group option labels, source metadata and missing-price behavior are preserved.
 
 These changes were checked through the actual public class with controlled transport fixtures, not successful live token responses. The bounded public catalog probes returned HTTP 403, including a Cloudflare browser-signature denial, so current live token-query compatibility remains unavailable. Discovery/search parent exclusions, search child retention and the existing pagination cap/request expansion remain outside this correction. A token query receives a single provider response per partition; it does not claim venue-wide enumeration completeness.
+
+## Polymarket newest discovery
+
+For non-search discovery, `sort: "newest"` preserves the returned parent order from Gamma's existing descending `startDate` request after child filtering and before the public offset/limit. Previously, client-side volume sorting overwrote that date order. This describes ordering within the fetched parent responses, not a global ranking of individual market creation dates. Default volume ranking and explicit volume/liquidity ranking are unchanged. Search, direct lookup, outcome lookup and parent retrieval behavior are unchanged by this ordering correction.
 
 ## Original publication verification
 

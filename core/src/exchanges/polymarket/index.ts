@@ -663,12 +663,13 @@ export class PolymarketExchange extends PredictionMarketExchange {
             return filtered.slice(0, params?.limit || 250000);
         }
 
-        // Client-side sort for default/non-search paths
+        // Newest discovery retains Gamma's descending parent startDate order.
+        // Other default/non-search paths use client-side volume/liquidity sorting.
         if (params?.sort === 'volume') {
             unifiedMarkets.sort((a, b) => b.volume24h - a.volume24h);
         } else if (params?.sort === 'liquidity') {
             unifiedMarkets.sort((a, b) => b.liquidity - a.liquidity);
-        } else if (!params?.marketId && !params?.slug && !params?.eventId) {
+        } else if (params?.sort !== 'newest' && !params?.marketId && !params?.slug && !params?.eventId) {
             unifiedMarkets.sort((a, b) => b.volume24h - a.volume24h);
         }
 
