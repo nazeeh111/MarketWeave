@@ -250,9 +250,8 @@ export async function paginateSearchParallel(url: string, params: any, maxResult
         const res = await http.get(url, {
             params: { ...params, page: pageNum }
         });
-        return res.data?.events;
+        return res.data?.events ?? [];
     }));
 
     return [firstPageEvents, ...remainingPages].flat();
 }
-

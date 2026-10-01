@@ -22,6 +22,65 @@ const parent: PolymarketRawEvent = {
     markets: children,
 };
 
+describe('Polymarket empty later search pages', () => {
+    // The primary search response permits nullable/omitted events. A later
+    // empty page must not crash normalization or discard another planned page.
+    function pagedExchange(empty: 'null' | 'missing' | 'array', rejectPage = false) {
+        const event = (id: string): PolymarketRawEvent => ({
+            id: `event-${id}`, slug: `event-${id}`, title: `Signal ${id}`,
+            active: true, closed: false, markets: [{
+                id, question: `Signal ${id}`, active: true, closed: false,
+                outcomes: '["Yes","No"]', clobTokenIds: JSON.stringify([`${id}1`, `${id}2`]),
+                endDate: '2030-01-01T00:00:00Z',
+            }],
+        });
+        const raw = deepFreeze([
+            { events: [event('710')], pagination: { hasMore: true, totalResults: 101 } },
+            { ...(empty === 'null' ? { events: null } : empty === 'array' ? { events: [] } : {}),
+                pagination: { hasMore: true, totalResults: 101 } },
+            { events: [event('730')], pagination: { hasMore: false, totalResults: 101 } },
+        ]);
+        const exchange = new PolymarketExchange();
+        const http = (exchange as unknown as { http: AxiosInstance }).http;
+        const requests: Array<Record<string, any>> = [];
+        const failure = new Error('Controlled later-page transport failure');
+        http.defaults.adapter = async config => {
+            if (config.method !== 'get' || new URL(config.url!).pathname !== '/public-search'
+                || ![1, 2, 3].includes(config.params.page) || requests.length >= 3) {
+                throw new Error('Bounded three-page transport guard');
+            }
+            requests.push(config.params);
+            if (rejectPage && config.params.page === 2) throw failure;
+            return { status: 200, statusText: 'OK', headers: {}, config, data: raw[config.params.page - 1] };
+        };
+        return { exchange, raw, requests, failure };
+    }
+
+    it.each(['null', 'missing', 'array'] as const)('market search retains surrounding results with a %s later-page event list', async empty => {
+        const { exchange, raw, requests } = pagedExchange(empty);
+        const before = JSON.stringify(raw);
+        expect((await exchange.fetchMarkets({ query: 'Signal', status: 'active', sort: 'newest', offset: 1, limit: 1 })).map(m => m.id)).toEqual(['730']);
+        expect(requests.map(p => p.page)).toEqual([1, 2, 3]);
+        expect(requests.every(p => p.q === 'Signal' && p.events_status === 'active' && p.sort === 'startDate')).toBe(true);
+        expect(JSON.stringify(raw)).toBe(before);
+    });
+
+    it.each(['null', 'missing', 'array'] as const)('event search retains surrounding results with a %s later-page event list', async empty => {
+        const { exchange, raw } = pagedExchange(empty);
+        const before = JSON.stringify(raw);
+        expect((await exchange.fetchEvents({ query: 'Signal', status: 'active', sort: 'newest' })).map(e => e.id)).toEqual(['event-710', 'event-730']);
+        expect(JSON.stringify(raw)).toBe(before);
+    });
+
+    it.each(['markets', 'events'] as const)('%s search still rejects a failed later request', async kind => {
+        const { exchange, failure } = pagedExchange('null', true);
+        const result = kind === 'markets'
+            ? exchange.fetchMarkets({ query: 'Signal' })
+            : exchange.fetchEvents({ query: 'Signal' });
+        await expect(result).rejects.toBe(failure);
+    });
+});
+
 function deepFreeze<T>(value: T): T {
     if (value && typeof value === 'object') {
         Object.values(value).forEach(deepFreeze);
