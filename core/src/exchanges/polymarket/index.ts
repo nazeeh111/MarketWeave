@@ -12,7 +12,7 @@ import {
     SeriesFetchParams,
     TradesParams,
 } from '../../BaseExchange';
-import { AuthenticationError } from '../../errors';
+import { AuthenticationError, BadRequest } from '../../errors';
 import { SubscribedAddressSnapshot, SubscriptionOption } from '../../subscriber/base';
 import { buildPolymarketTradesActivity, POLYMARKET_DEFAULT_SUBSCRIPTION } from '../../subscriber/external/goldsky';
 import { WatcherConfig } from '../../subscriber/watcher';
@@ -616,13 +616,26 @@ export class PolymarketExchange extends PredictionMarketExchange {
     // ----------------------------------------------------------------------------
 
     protected async fetchMarketsImpl(params?: MarketFilterParams): Promise<UnifiedMarket[]> {
+        if (params?.status !== undefined && !['active', 'inactive', 'closed', 'all'].includes(params.status)) {
+            throw new BadRequest('Market status must be active, inactive, closed or all.', this.name);
+        }
         const rawEvents = await this.fetcher.fetchRawMarkets(params);
 
         const unifiedMarkets: UnifiedMarket[] = [];
         const useQuestionFallback = !!(params?.marketId || params?.slug || params?.eventId);
+        const hasDirectLookup = !!(params?.marketId || params?.slug || params?.eventId || params?.outcomeId);
+        const status = params?.status ?? (hasDirectLookup ? 'all' : 'active');
 
         for (const event of rawEvents) {
-            const markets = this.normalizer.normalizeMarketsFromEvent(event, { useQuestionAsCandidateFallback: useQuestionFallback });
+            // Gamma filters parent events, whose children can have different lifecycles.
+            // Filter raw child flags before normalization, sorting and result limits.
+            const filteredEvent = status === 'all' ? event : {
+                ...event,
+                markets: event.markets?.filter(market => status === 'active'
+                    ? market.active === true && market.closed !== true && market.archived !== true
+                    : market.closed === true),
+            };
+            const markets = this.normalizer.normalizeMarketsFromEvent(filteredEvent, { useQuestionAsCandidateFallback: useQuestionFallback });
             unifiedMarkets.push(...markets);
         }
 

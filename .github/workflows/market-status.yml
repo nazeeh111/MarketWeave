@@ -1,0 +1,28 @@
+name: Market status
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  market-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SKIP_UNRS_RESOLVER_FALLBACK: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build --workspace=pmxt-core
+      - run: >-
+          npm test --workspace=pmxt-core -- --runInBand
+          test/exchanges/polymarket-market-status.test.ts
+          test/normalizers/exchange-normalizers.test.ts
+          test/unit/baseExchange.core.test.ts
+          test/pipeline/polymarket-v2-spec.test.ts
