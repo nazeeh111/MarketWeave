@@ -167,6 +167,71 @@ describe('Polymarket public market lifecycle filtering', () => {
     });
 });
 
+describe('Polymarket market search sort selection', () => {
+    function searchExchange(status?: MarketFilterParams['status'], paged = false) {
+        const closed = status === 'closed' || status === 'inactive';
+        const event = (id: string, startDate: string, volume: number, liquidity: number): PolymarketRawEvent => ({
+            id: `parent-${id}`, title: `Fixture ${id}`, slug: `fixture-${id}`, startDate,
+            volume, liquidity, active: !closed, closed,
+            markets: [{ id, question: 'Order candidate', active: !closed, closed,
+                outcomes: '["Yes","No"]', clobTokenIds: JSON.stringify([`${id}1`, `${id}2`]),
+                volume24hr: volume, liquidity, endDate: '2030-01-01T00:00:00Z' }],
+        });
+        const raw = deepFreeze([
+            event('410', '2026-10-01T00:00:00Z', 1, 1),
+            event('420', '2020-01-01T00:00:00Z', 100, 2),
+            event('430', '2024-01-01T00:00:00Z', 2, 100),
+        ]);
+        const exchange = new PolymarketExchange();
+        const http = (exchange as unknown as { http: AxiosInstance }).http;
+        const requests: Array<Record<string, any>> = [];
+        http.defaults.adapter = async config => {
+            if (config.method !== 'get' || new URL(config.url!).pathname !== '/public-search' || requests.length >= (paged ? 2 : 1)) {
+                throw new Error('Bounded public-search transport guard');
+            }
+            requests.push(config.params);
+            // Controlled provider-shaped ordering; no fetcher or normalizer mock.
+            const ordered = [...raw].sort((a, b) => config.params.sort === 'startDate'
+                ? Date.parse(String(b.startDate)) - Date.parse(String(a.startDate))
+                : Number(b[config.params.sort]) - Number(a[config.params.sort]));
+            const data = { events: paged ? (config.params.page === 1 ? ordered.slice(0, 1) : ordered.slice(1)) : ordered,
+                pagination: { hasMore: paged && config.params.page === 1, totalResults: 51 } };
+            return { status: 200, statusText: 'OK', headers: {}, config, data };
+        };
+        return { exchange, requests, raw };
+    }
+
+    it.each([
+        [undefined, 'volume', '420'], ['volume', 'volume', '420'],
+        ['newest', 'startDate', '410'], ['liquidity', 'liquidity', '430'],
+    ] as const)('market search sort %p sends %s and retains its returned order before limit', async (sort, expectedSort, id) => {
+        const { exchange, requests } = searchExchange();
+        expect((await exchange.fetchMarkets({ query: 'Order', sort, limit: 1 })).map(m => m.id)).toEqual([id]);
+        expect(requests[0]).toMatchObject({ q: 'Order', sort: expectedSort, ascending: false, events_status: 'active' });
+    });
+
+    it.each(['closed', 'inactive', 'all'] as const)('newest market search retains %s selection', async status => {
+        const { exchange, requests } = searchExchange(status);
+        expect((await exchange.fetchMarkets({ query: 'Order', sort: 'newest', status, limit: 1 })).map(m => m.id)).toEqual(['410']);
+        expect(requests[0]).toMatchObject({ sort: 'startDate', events_status: status === 'all' ? undefined : 'closed' });
+    });
+
+    it('preserves newest query order before public offset/limit and leaves raw bytes unchanged', async () => {
+        const { exchange, raw } = searchExchange();
+        const before = JSON.stringify(raw);
+        expect((await exchange.fetchMarkets({ query: 'Order', sort: 'newest', offset: 2, limit: 1 })).map(m => m.id)).toEqual(['420']);
+        expect(JSON.stringify(raw)).toBe(before);
+    });
+
+    it('forwards the selected sort to every existing search page', async () => {
+        const { exchange, requests } = searchExchange(undefined, true);
+        expect((await exchange.fetchMarkets({ query: 'Order', sort: 'newest' })).map(m => m.id)).toEqual(['410', '430', '420']);
+        expect(requests.map(p => ({ sort: p.sort, page: p.page, ascending: p.ascending }))).toEqual([
+            { sort: 'startDate', page: 1, ascending: false }, { sort: 'startDate', page: 2, ascending: false },
+        ]);
+    });
+});
+
 describe('Polymarket newest discovery ordering', () => {
     function orderedDiscovery(status?: MarketFilterParams['status'], rejectedChild = false) {
         const closed = status === 'closed' || status === 'inactive';
