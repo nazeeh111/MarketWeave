@@ -22,6 +22,7 @@ jobs:
       - run: npm run build --workspace=pmxt-core
       - run: >-
           npm test --workspace=pmxt-core -- --runInBand
+          test/exchanges/polymarket-outcome-lookup.test.ts
           test/exchanges/polymarket-market-status.test.ts
           test/normalizers/exchange-normalizers.test.ts
           test/unit/baseExchange.core.test.ts

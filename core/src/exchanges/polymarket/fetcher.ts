@@ -2,7 +2,7 @@ import { AxiosInstance } from 'axios';
 import { MarketFilterParams, EventFetchParams, OHLCVParams, TradesParams, MyTradesParams } from '../../BaseExchange';
 import { NotFound, OrderNotFound } from '../../errors';
 import { IExchangeFetcher, FetcherContext } from '../interfaces';
-import { GAMMA_API_URL, GAMMA_SEARCH_URL, paginateParallel, paginateSearchParallel } from './utils';
+import { GAMMA_API_URL, GAMMA_SEARCH_URL, marketHasClobTokenId, paginateParallel, paginateSearchParallel } from './utils';
 import { polymarketErrorMapper } from './errors';
 
 /**
@@ -146,6 +146,10 @@ export class PolymarketFetcher implements IExchangeFetcher<PolymarketRawEvent, P
 
             if (params?.query) {
                 return this.fetchRawMarketsSearch(params);
+            }
+
+            if (params?.outcomeId) {
+                return this.fetchRawMarketsByOutcomeId(params.outcomeId, params.status);
             }
 
             return this.fetchRawMarketsDefault(params);
@@ -361,10 +365,33 @@ export class PolymarketFetcher implements IExchangeFetcher<PolymarketRawEvent, P
         if (!markets || markets.length === 0) return [];
 
         // Wrap each market in an event-like shape for consistent normalizer input
-        return markets.map((market: any) => {
-            const event = market.events?.[0] || market;
-            return { ...event, markets: [market] };
-        });
+        return markets.map((market: PolymarketRawMarket) => this.wrapMarket(market));
+    }
+
+    private wrapMarket(market: PolymarketRawMarket): PolymarketRawEvent {
+        const event = market.events?.[0] || market;
+        return { ...event, markets: [market] };
+    }
+
+    private async fetchRawMarketsByOutcomeId(outcomeId: string, status?: MarketFilterParams['status']): Promise<PolymarketRawEvent[]> {
+        // Gamma defaults closed=false. Inclusive lookups explicitly read both
+        // partitions, with no catalog fallback or pagination fanout.
+        const closedPartitions = status === 'active' ? [false]
+            : status === 'closed' || status === 'inactive' ? [true] : [false, true];
+        const markets: PolymarketRawMarket[] = [];
+        const seen = new Set<string>();
+        for (const closed of closedPartitions) {
+            const response = await this.http.get(GAMMA_MARKETS_URL, {
+                params: { clob_token_ids: [outcomeId], closed },
+            });
+            for (const market of Array.isArray(response.data) ? response.data : []) {
+                if (!marketHasClobTokenId(market, outcomeId)) continue;
+                if (market.id && seen.has(market.id)) continue;
+                if (market.id) seen.add(market.id);
+                markets.push(market);
+            }
+        }
+        return markets.map(market => this.wrapMarket(market));
     }
 
     private async fetchRawMarketsByEventId(eventId: string): Promise<PolymarketRawEvent[]> {
@@ -380,8 +407,7 @@ export class PolymarketFetcher implements IExchangeFetcher<PolymarketRawEvent, P
         if (!market) return [];
 
         // Wrap in event-like shape for consistent normalizer input
-        const event = market.events?.[0] || market;
-        return [{ ...event, markets: [market] }];
+        return [this.wrapMarket(market)];
     }
 
     private async fetchRawMarketsSearch(params: MarketFilterParams): Promise<PolymarketRawEvent[]> {
