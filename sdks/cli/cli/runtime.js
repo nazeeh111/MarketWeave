@@ -371,14 +371,14 @@ function localUnavailableMessage(error, color = (0, color_js_1.createColor)({ en
         commandLine(color, "pmxt auth login --api-key <pmxt_api_key>"),
         commandLine(color, "pmxt <exchange> <command> --hosted"),
         "",
-        color.warning("Hosted PMXT is faster for indexed search, router matches, and enterprise data."),
+        color.warning("To use a hosted PMXT service, configure its API key explicitly."),
     ].join("\n");
 }
 function isLoopbackUrl(baseUrl) {
     try {
         const parsed = new URL(baseUrl);
         return parsed.protocol === "http:"
-            && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1");
+            && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]");
     }
     catch {
         return false;
@@ -436,7 +436,7 @@ function maybeSuggestHosted(flags = {}, env = process.env) {
     }
     process.stderr.write([
         color.warning("Using local PMXT instance."),
-        "Hosted PMXT is faster for indexed search, router matches, and enterprise data:",
+        "To use a hosted PMXT service, configure its API key explicitly:",
         commandLine(color, "pmxt auth login --api-key <pmxt_api_key>"),
         "",
     ].join("\n"));

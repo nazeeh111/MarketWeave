@@ -23,15 +23,7 @@ const color_js_1 = require("./colors.js");
 const constants_js_1 = require("./constants.js");
 const runtime_js_1 = require("./runtime.js");
 const server_manager_js_1 = require("./server-manager.js");
-const CREDENTIAL_KEYS = [
-    "apiKey",
-    "apiSecret",
-    "apiToken",
-    "passphrase",
-    "privateKey",
-    "proxyAddress",
-    "signatureType",
-];
+
 exports.pmxtCredentialFlags = {
     "auth-profile": core_1.Flags.string({
         description: "Auth store profile to read after flags and environment variables",
@@ -333,12 +325,7 @@ async function prepareWebSocket(credentials) {
             : undefined),
     };
 }
-function clean(value) {
-    if (typeof value !== "string")
-        return undefined;
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-}
+
 function ensureTrailingSlash(value) {
     return value.endsWith("/") ? value : `${value}/`;
 }
@@ -346,7 +333,7 @@ function isLoopbackUrl(baseUrl) {
     try {
         const parsed = new URL(baseUrl);
         return parsed.protocol === "http:"
-            && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "::1");
+            && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]");
     }
     catch {
         return false;
@@ -420,35 +407,11 @@ function localUnavailableMessage(error, colors = (0, color_js_1.createColor)({ e
         commandLine(colors, "pmxt auth login --api-key <pmxt_api_key>"),
         commandLine(colors, "pmxt <exchange> <command> --hosted"),
         "",
-        colors.warning("Hosted PMXT is faster for indexed search, router matches, and enterprise data."),
+        colors.warning("To use a hosted PMXT service, configure its API key explicitly."),
     ].join("\n");
 }
-function getStoreBuckets(store, profile, options) {
-    const buckets = [];
-    const targetName = options.targetName;
-    const plural = options.targetKind ? `${options.targetKind}s` : undefined;
-    if (profile) {
-        const profileStore = readNestedValue(store, `profiles.${profile}`);
-        buckets.push(readNestedValue(profileStore, `${plural}.${targetName}`));
-        buckets.push(readNestedValue(profileStore, targetName || ""));
-        buckets.push(profileStore);
-    }
-    buckets.push(readNestedValue(store, `${plural}.${targetName}`));
-    buckets.push(readNestedValue(store, `${options.targetKind}.${targetName}`));
-    buckets.push(readNestedValue(store, targetName || ""));
-    buckets.push(readNestedValue(store, "default"));
-    buckets.push(readNestedValue(store, "credentials"));
-    buckets.push(store);
-    return buckets.filter((bucket) => {
-        return !!bucket && typeof bucket === "object" && !Array.isArray(bucket);
-    });
-}
-function parseOptionalNumber(value) {
-    if (value === undefined)
-        return undefined;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-}
+
+
 function normalizeRuntimeEnv(env, targetName) {
     const normalized = env.PMXT_AUTH_STORE_PATH && !env.PMXT_AUTH_STORE
         ? { ...env, PMXT_AUTH_STORE: env.PMXT_AUTH_STORE_PATH }
@@ -475,15 +438,4 @@ function normalizeRuntimeEnv(env, targetName) {
         }
     }
     return normalized;
-}
-function readNestedValue(obj, key) {
-    if (!obj || typeof obj !== "object" || !key)
-        return undefined;
-    let current = obj;
-    for (const part of key.split(".")) {
-        if (!current || typeof current !== "object")
-            return undefined;
-        current = current[part];
-    }
-    return current;
 }
