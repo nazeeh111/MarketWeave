@@ -198,7 +198,7 @@ class ServerManager {
 
   async killOldServer() {
     const info = this.getServerInfo();
-    if (info?.pid) {
+    if (Number.isSafeInteger(info?.pid) && info.pid > 0) {
       try {
         process.kill(info.pid, "SIGTERM");
         await new Promise((resolve) => setTimeout(resolve, 500));
