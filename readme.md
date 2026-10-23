@@ -2,6 +2,17 @@
 
 A common interface for prediction-market data, order books, execution estimates and supported venue operations. MarketWeave brings the TypeScript core, Python SDK and command-line tools into one source workspace.
 
+## Choose an entry point
+
+| Goal | Start here |
+| --- | --- |
+| Understand the components | [Architecture](ARCHITECTURE.md) |
+| Integrate Python or TypeScript | [Integration reference](docs/COMPATIBILITY_GUIDE.md) |
+| Explore the core API | [API reference](core/API_REFERENCE.md) |
+| Use the terminal | [CLI guide](sdks/cli/README.md) |
+| Work on the code | [Contribution guide](CONTRIBUTING.md) |
+| Inspect preservation checks | [Compatibility notes](COMPATIBILITY.md) |
+
 ## Start with the source
 
 Use Node.js 18 or later, npm, and Java 11 or later with `node`, `npm`, and `java` available on your PATH. The SDK generation command runs OpenAPI Generator through Java and downloads its pinned generator on first use.
@@ -17,16 +28,9 @@ npm run build --workspace=pmxtjs
 
 Package names (`pmxt-core`, `pmxtjs`, `pmxt`) and command names are retained as compatibility interfaces. No new registry packages are required for this source checkout. Existing response fields, calculations, transport routes and venue credentials retain their established meanings.
 
-## Choose an entry point
+## Follow one market through the workspace
 
-| Goal | Start here |
-| --- | --- |
-| Understand the components | [Architecture](ARCHITECTURE.md) |
-| Integrate Python or TypeScript | [Integration reference](docs/COMPATIBILITY_GUIDE.md) |
-| Explore the core API | [API reference](core/API_REFERENCE.md) |
-| Use the terminal | [CLI guide](sdks/cli/README.md) |
-| Work on the code | [Contribution guide](CONTRIBUTING.md) |
-| Inspect preservation checks | [Compatibility notes](COMPATIBILITY.md) |
+The venue adapter reads the provider payload, the core maps it into shared market and order-book models, and the SDK or CLI exposes those models. Use the feature matrix to check a specific operation before choosing a venue. Execution-price estimates describe the supplied order book; they do not guarantee a fill.
 
 ## Data path
 
