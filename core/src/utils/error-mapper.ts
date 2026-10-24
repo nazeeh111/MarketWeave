@@ -7,6 +7,8 @@ import {
     NotFound,
     OrderNotFound,
     MarketNotFound,
+    EventNotFound,
+    NotSupported,
     RateLimitExceeded,
     InvalidOrder,
     InsufficientFunds,
@@ -14,6 +16,14 @@ import {
     NetworkError,
     ExchangeNotAvailable,
 } from '../errors';
+
+// These shipped errors keep their state in own properties. Unknown external
+// subclasses retain the historical constructor path (including private state).
+const CONTEXT_COPYABLE_ERRORS = new Set<Function>([
+    BaseError, BadRequest, AuthenticationError, PermissionDenied, NotFound,
+    OrderNotFound, MarketNotFound, EventNotFound, RateLimitExceeded, InvalidOrder,
+    InsufficientFunds, ValidationError, NotSupported, NetworkError, ExchangeNotAvailable,
+]);
 
 /**
  * A plain error-like object with an HTTP status and optional data payload.
@@ -85,10 +95,34 @@ export class ErrorMapper {
         // Already a BaseError, just add exchange context if missing
         if (error instanceof BaseError) {
             if (!error.exchange && this.exchangeName) {
-                return new (error.constructor as new (...args: unknown[]) => BaseError)(
-                    error.message,
-                    this.exchangeName
-                );
+                if (!CONTEXT_COPYABLE_ERRORS.has(error.constructor)) {
+                    return new (error.constructor as new (...args: unknown[]) => BaseError)(
+                        error.message,
+                        this.exchangeName
+                    );
+                }
+                // Subclasses have different constructor arguments. Preserve their
+                // existing message/metadata while adding context to a native Error.
+                const properties: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(error);
+                // V8's lazy stack getter reads the receiving Error's native state.
+                if (properties.stack) {
+                    properties.stack = {
+                        value: error.stack,
+                        writable: properties.stack.writable ?? true,
+                        enumerable: properties.stack.enumerable,
+                        configurable: properties.stack.configurable,
+                    };
+                }
+                properties.exchange = {
+                    value: this.exchangeName,
+                    writable: properties.exchange?.writable ?? true,
+                    enumerable: properties.exchange?.enumerable ?? true,
+                    configurable: properties.exchange?.configurable ?? true,
+                };
+                const mapped = new Error();
+                Object.setPrototypeOf(mapped, Object.getPrototypeOf(error));
+                Object.defineProperties(mapped, properties);
+                return mapped as BaseError;
             }
             return error;
         }
