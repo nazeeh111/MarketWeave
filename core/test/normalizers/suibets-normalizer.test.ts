@@ -389,9 +389,25 @@ describe('SuibetsNormalizer', () => {
     // -------------------------------------------------------------------------
 
     describe('normalizePosition', () => {
-        it('marketId is suibets:matchId when matchId is present', () => {
+        it('marketId identifies the offer market, not its parent match', () => {
+            const market = normalizer.normalizeMarket(rawOffer)!;
             const position = normalizer.normalizePosition(rawOffer);
-            expect(position.marketId).toBe('suibets:match-456');
+            expect(position.marketId).toBe(market.marketId);
+            expect(position.marketId).toBe('suibets:offer-123');
+            expect(position.marketId).toBe(market.outcomes[0].marketId);
+        });
+
+        it('positions for two offers in one event join their own markets', () => {
+            const offers = [rawOffer, { ...rawOffer, id: 'offer-789' }];
+            const event = normalizer.normalizeEvent({ ...rawEvent, offers })!;
+            const positions = offers.map(offer => normalizer.normalizePosition(offer));
+            expect(new Set(positions.map(position => position.marketId)).size).toBe(2);
+            for (const position of positions) {
+                const market = event.markets.find(m => m.marketId === position.marketId)!;
+                expect(market).toBeDefined();
+                expect(market.eventId).toBe(event.id);
+                expect(market.outcomes[0].outcomeId).toBe(position.outcomeId);
+            }
         });
 
         it('outcomeId is offer-id:creator', () => {

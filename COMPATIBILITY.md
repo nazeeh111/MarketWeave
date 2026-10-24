@@ -44,6 +44,14 @@ When the first page reports `hasMore: true` but omits `totalResults` or sets it 
 
 The included provider schema permits an omitted total. This is an unsupported continuation state in this client, rather than a claim that an omitted total violates the provider schema. A complete fallback still needs verified pagination semantics and a resource policy; no sequential crawl or catalog-completeness claim is introduced. Other existing pagination limitations remain.
 
+## SuiBets position market identifiers
+
+SuiBets positions now return `suibets:<offerId>` as `marketId`, matching the normalized offer market and its outcomes. Previously, a present match ID was used instead, so separate offers in one match could share the wrong position market ID. Group positions by the fetched market's `eventId` when grouping by match. Missing or null match IDs retain their previous offer-ID fallback; other position fields are unchanged.
+
+Refresh existing saved SuiBets positions and rebuild indexes keyed by their market IDs. Do not mix the old event-valued keys with the corrected offer-valued keys: this can retain stale records or merge distinct offers. There is no built-in migration for saved records.
+
+This correction was checked with controlled local fixtures and SDK conversions. It does not establish current external provider compatibility or live account behavior.
+
 ## Original publication verification
 
 - Core TypeScript build: passed.

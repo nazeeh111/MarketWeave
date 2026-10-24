@@ -110,7 +110,7 @@ export class SuibetsNormalizer implements IExchangeNormalizer<SuibetsRawOffer, S
     normalizePosition(raw: SuibetsRawOffer): Position {
         const odds = Number(raw.creatorOdds) || 2;
         return {
-            marketId: toMarketId(raw.matchId ?? raw.id),
+            marketId: toMarketId(raw.id),
             outcomeId: toOutcomeId(raw.id, 'creator'),
             outcomeLabel: sideLabel(raw, 'creator'),
             size: mistToSui(raw.creatorStake ?? 0),
