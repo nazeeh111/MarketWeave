@@ -80,6 +80,8 @@ export class SidecarWsClient {
     private subscriptions: Map<string, WsSubscription> = new Map();
     /** (method:symbolKey) -> requestId -- avoids duplicate subscribes */
     private activeSubs: Map<string, string> = new Map();
+    /** Batch reuse belongs to the socket that accepted the subscription. */
+    private activeBatchSubs: Map<string, { requestId: string; ws: WebSocket }> = new Map();
 
     private connectPromise: Promise<void> | null = null;
 
@@ -287,6 +289,11 @@ export class SidecarWsClient {
         const requestId = msg.id;
 
         if (eventType === "error" && requestId) {
+            for (const [key, batch] of this.activeBatchSubs) {
+                if (batch.requestId === requestId) {
+                    this.activeBatchSubs.delete(key);
+                }
+            }
             const sub = this.subscriptions.get(requestId);
             if (sub?.reject) {
                 sub.reject(new PmxtError(
@@ -401,32 +408,38 @@ export class SidecarWsClient {
 
         await this.ensureConnected();
 
-        const requestId = `req-${Math.random().toString(36).slice(2, 14)}`;
+        const subKey = `batch:${exchange}:${method}:${JSON.stringify(args)}`;
+        const existing = this.activeBatchSubs.get(subKey);
+        let requestId = existing?.requestId;
+        if (!requestId || existing?.ws !== this.ws || !this.subscriptions.has(requestId)) {
+            requestId = `req-${Math.random().toString(36).slice(2, 14)}`;
 
-        const sub: WsSubscription = {
-            requestId,
-            method,
-            symbols,
-            resolve: null,
-            reject: null,
-        };
-        this.subscriptions.set(requestId, sub);
+            const sub: WsSubscription = {
+                requestId,
+                method,
+                symbols,
+                resolve: null,
+                reject: null,
+            };
+            this.subscriptions.set(requestId, sub);
 
-        const message: Record<string, any> = {
-            id: requestId,
-            action: "subscribe",
-            exchange,
-            method,
-            args,
-        };
-        if (credentials) {
-            message.credentials = credentials;
+            const message: Record<string, any> = {
+                id: requestId,
+                action: "subscribe",
+                exchange,
+                method,
+                args,
+            };
+            if (credentials) {
+                message.credentials = credentials;
+            }
+
+            if (!this.ws) {
+                throw new PmxtError('[ws-client] Cannot send: WebSocket not connected');
+            }
+            this.ws.send(JSON.stringify(message));
+            this.activeBatchSubs.set(subKey, { requestId, ws: this.ws });
         }
-
-        if (!this.ws) {
-            throw new PmxtError('[ws-client] Cannot send: WebSocket not connected');
-        }
-        this.ws.send(JSON.stringify(message));
 
         // Wait for first data event.
         const firstData = await this.waitForData(requestId, timeoutMs);

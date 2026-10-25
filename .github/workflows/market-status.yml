@@ -34,3 +34,5 @@ jobs:
           test/exchanges/kalshi-event-metadata.test.ts
           test/normalizers/kalshi-ohlcv-normalization.test.ts
           test/normalizers/kalshi-event-title-normalization.test.ts
+      - name: Verify SDK WebSocket subscription regressions
+        run: npm test --workspace=pmxtjs -- --runInBand --runTestsByPath tests/ws-client.test.ts --passWithNoTests=false
