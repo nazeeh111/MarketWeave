@@ -170,8 +170,9 @@ export class LimitlessWebSocket {
                 }
             });
 
+            let timeout: ReturnType<typeof setTimeout> | undefined;
             const timeoutPromise = new Promise<OrderBook>((resolve) => {
-                setTimeout(async () => {
+                timeout = setTimeout(async () => {
                     // Timeout won the race -- remove the stale resolver (#372)
                     const resolvers = this.orderbookResolvers.get(marketSlug);
                     if (resolvers) {
@@ -191,7 +192,11 @@ export class LimitlessWebSocket {
                 }, WS_UPDATE_TIMEOUT);
             });
 
-            return await Promise.race([wsUpdatePromise, timeoutPromise]);
+            try {
+                return await Promise.race([wsUpdatePromise, timeoutPromise]);
+            } finally {
+                if (timeout !== undefined) clearTimeout(timeout);
+            }
         } catch (err) {
             logger.error('LimitlessWS: watchOrderBook failed', {
                 market: marketSlug,
