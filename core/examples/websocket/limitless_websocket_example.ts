@@ -3,7 +3,7 @@ import path from 'path';
 // Load .env from the root directory
 config({ path: path.resolve(__dirname, '../../../.env') });
 
-import pmxt from '../../src/index';
+import pmxt, { OrderBook } from '../../src/index';
 
 /**
  * Example demonstrating Limitless WebSocket functionality.
@@ -23,6 +23,8 @@ async function demonstrateWebSockets() {
         privateKey: process.env.LIMITLESS_PRIVATE_KEY,
     });
 
+    // These are illustrative identifiers, not a verified current market.
+    // Replace both with active CLOB/AMM markets before running this example.
     // Example market slug for CLOB orderbook
     const marketSlug = 'largest-company-end-of-2025-1746118069282';
 
@@ -32,14 +34,13 @@ async function demonstrateWebSockets() {
     try {
         // 1. Subscribe to CLOB orderbook updates (no auth required)
         console.log('1. Subscribing to CLOB orderbook updates...');
-        await client.watchOrderBook(marketSlug, (orderbook) => {
+        const printOrderBook = (orderbook: OrderBook) => {
             console.log('\n[Orderbook Update]');
             console.log(`  Market: ${marketSlug}`);
-            console.log(`  Best Bid: ${orderbook.bids[0]?.[0] || 'N/A'}`);
-            console.log(`  Best Ask: ${orderbook.asks[0]?.[0] || 'N/A'}`);
+            console.log(`  Best Bid: ${orderbook.bids[0]?.price ?? 'N/A'}`);
+            console.log(`  Best Ask: ${orderbook.asks[0]?.price ?? 'N/A'}`);
             console.log(`  Timestamp: ${new Date(orderbook.timestamp).toISOString()}`);
-        });
-        console.log('Subscribed to orderbook updates\n');
+        };
 
         // 2. Subscribe to AMM price updates (no auth required)
         console.log('2. Subscribing to AMM price updates...');
@@ -73,10 +74,11 @@ async function demonstrateWebSockets() {
 
         console.log('🎧 Listening for updates... (Press Ctrl+C to exit)\n');
 
-        // Keep the process running to receive updates
-        await new Promise(() => {
-            // This will run indefinitely until the user stops it
-        });
+        // Order books use the promise-based streaming contract. Callback-based
+        // AMM/user subscriptions above stay active while this loop awaits updates.
+        while (true) {
+            printOrderBook(await client.watchOrderBook(marketSlug));
+        }
     } catch (error: any) {
         console.error('Error:', error.message);
 
