@@ -67,11 +67,11 @@ export class KalshiNormalizer implements IExchangeNormalizer<KalshiRawEvent, Kal
             price = (yesAsk + yesBid) / 2;
         } else if (yesAsk != null) {
             price = yesAsk;
-        } else if (market.last_price) {
+        } else if (market.last_price != null) {
             price = fromKalshiCents(market.last_price);
-        } else if (market.yes_ask && market.yes_bid) {
+        } else if (market.yes_ask != null && market.yes_bid != null) {
             price = (fromKalshiCents(market.yes_ask) + fromKalshiCents(market.yes_bid)) / 2;
-        } else if (market.yes_ask) {
+        } else if (market.yes_ask != null) {
             price = fromKalshiCents(market.yes_ask);
         }
 

@@ -29,3 +29,8 @@ jobs:
           test/unit/error-mapper-context.test.ts
           test/unit/limitless-watch-fallback.core.test.ts
           test/pipeline/polymarket-v2-spec.test.ts
+          test/normalizers/kalshi-zero-cent-price.test.ts
+          test/pipeline/kalshi-pagination.test.ts
+          test/exchanges/kalshi-event-metadata.test.ts
+          test/normalizers/kalshi-ohlcv-normalization.test.ts
+          test/normalizers/kalshi-event-title-normalization.test.ts
