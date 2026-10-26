@@ -91,12 +91,19 @@ export class ServerManager {
         return info?.port || ServerManager.DEFAULT_PORT;
     }
 
-    /**
-     * Get the access token from the lock file.
-     */
-    getAccessToken(): string | undefined {
+    /** A global lock token belongs only to its plain loopback port. */
+    getAccessToken(target: string = this.baseUrl): string | undefined {
+        let url: URL;
+        try {
+            url = new URL(target);
+            if (!["http:", "ws:"].includes(url.protocol)
+                || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+                || url.username || url.password) return undefined;
+        } catch {
+            return undefined;
+        }
         const info = this.getServerInfo();
-        return info?.accessToken;
+        return info?.port === Number(url.port || 80) ? info.accessToken : undefined;
     }
 
     /**

@@ -495,10 +495,8 @@ export abstract class Exchange {
     protected getAuthHeaders(): Record<string, string> {
         const headers: Record<string, string> = { ...(this.config.headers as Record<string, string>) };
 
-        // Local sidecar access token (read from the lock file). Only
-        // meaningful when talking to a local sidecar we spawned
-        // ourselves; harmless elsewhere.
-        const accessToken = this.serverManager.getAccessToken();
+        // Local lock credentials must belong to the actual loopback target.
+        const accessToken = this.serverManager.getAccessToken(this.resolveBaseUrl());
         if (accessToken) {
             headers['x-pmxt-access-token'] = accessToken;
         }
@@ -600,7 +598,7 @@ export abstract class Exchange {
         const host = this.resolveBaseUrl();
         const accessToken = this.isHosted
             ? this.pmxtApiKey
-            : this.serverManager.getAccessToken();
+            : this.serverManager.getAccessToken(this._websocketConfig?.wsUrl || host);
         const authParamName = this.isHosted ? "apiKey" : "token";
 
         const client = new SidecarWsClient(host, accessToken || undefined, authParamName, this._websocketConfig);

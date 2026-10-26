@@ -11,6 +11,7 @@ import re
 import sys
 import time
 import urllib.error
+from urllib.parse import urlsplit
 import uuid
 from abc import ABC
 from datetime import datetime
@@ -544,17 +545,28 @@ class Exchange(ABC):
             return f"http://localhost:{server_info['port']}"
         return self._api_client.configuration.host
 
-    def _get_auth_headers(self) -> Dict[str, str]:
-        """Build request headers with a fresh access token read from the lock file.
+    def _sidecar_access_token(self, target: str) -> Optional[str]:
+        """A global lock token belongs only to its plain loopback port."""
+        try:
+            url = urlsplit(target)
+            if (url.scheme not in ("http", "ws")
+                    or url.hostname not in ("localhost", "127.0.0.1", "::1")
+                    or url.username is not None or url.password is not None):
+                return None
+            port = url.port or 80
+        except ValueError:
+            return None
+        info = self._server_manager.get_server_info()
+        if info and info.get("port") == port:
+            return info.get("accessToken")
+        return None
 
-        The token is re-read on every call so that if the sidecar server restarts
-        (and writes a new token) existing client objects automatically recover on
-        the next request — no re-instantiation required.
-        """
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """Bind local lock credentials to their endpoint; retain hosted bearer auth."""
         headers: Dict[str, str] = dict(self._api_client.default_headers)
-        server_info = self._server_manager.get_server_info()
-        if server_info and 'accessToken' in server_info:
-            headers['x-pmxt-access-token'] = server_info['accessToken']
+        access_token = self._sidecar_access_token(self._resolve_sidecar_host())
+        if access_token:
+            headers['x-pmxt-access-token'] = access_token
         if self.pmxt_api_key:
             headers['Authorization'] = f'Bearer {self.pmxt_api_key}'
         return headers
@@ -2481,10 +2493,8 @@ class Exchange(ABC):
             if self.is_hosted:
                 client = SidecarWsClient(host, api_key=self.pmxt_api_key, config=self.websocket)
             else:
-                server_info = self._server_manager.get_server_info()
-                access_token = (
-                    server_info.get("accessToken") if server_info else None
-                )
+                target = (self.websocket or {}).get("wsUrl") or host
+                access_token = self._sidecar_access_token(target)
                 client = SidecarWsClient(host, access_token=access_token, config=self.websocket)
             try:
                 # Trigger connection to validate the endpoint exists
