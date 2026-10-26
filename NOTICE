@@ -1,0 +1,8 @@
+MarketWeave adapts the pmxt implementation while retaining package, SDK,
+protocol and venue interfaces. Source: https://github.com/pmxt-dev/pmxt
+Reference release: v2.17.1, commit 60bdabd5b4484778afe614f15890c438dd083e1b.
+
+The upstream MIT notices at this revision name pmxt.dev for the root source
+and qoery.com for the core. These notices are retained respectively in
+LICENSE and core/LICENSE, alongside the MarketWeave addition notice.
+MarketWeave is an independent derivative, not an upstream pmxt release.
