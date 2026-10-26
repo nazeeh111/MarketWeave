@@ -63,6 +63,7 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(calls, r'npm\|[^\n]+/sdks/typescript\|test')
         self.assertIn('--passWithNoTests=false', calls)
+        self.assertRegex(calls, r'python3\|[^\n]+/sdks/python\|-m pytest tests/ -v -m \n')
         self.assertNotIn('install', calls)
         self.assertIn('All SDK', result.stdout)
 
