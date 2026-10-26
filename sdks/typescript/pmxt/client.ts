@@ -417,11 +417,11 @@ export abstract class Exchange {
             this.escrow = new Escrow(this);
         }
 
-        // auto_start_server defaults: true for local, false for hosted.
+        // Only the implicit local default starts a shared sidecar automatically.
         // An explicit value in the options always wins.
         const autoStartServer = options.autoStartServer !== undefined
             ? options.autoStartServer
-            : !this.isHosted;
+            : this._useSidecarLockBaseUrl;
 
         // Initialize server manager (no network calls happen here — the
         // constructor just stores config).

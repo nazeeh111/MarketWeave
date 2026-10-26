@@ -59,7 +59,7 @@ from .models import (
     PriceComparison,
     ArbitrageOpportunity,
 )
-from .constants import LOCAL_URL, resolve_pmxt_base_url
+from .constants import ENV_BASE_URL, LOCAL_URL, resolve_pmxt_base_url
 from .errors import (
     InvalidOrder,
     InvalidSignature,
@@ -349,7 +349,8 @@ class Exchange(ABC):
                 presence of ``pmxt_api_key`` (implying the hosted endpoint),
                 then falling back to the local sidecar default.
             auto_start_server: When True, start the local sidecar on demand.
-                Defaults to True for local mode and False for hosted mode.
+                Defaults to True only for the implicit local default; explicit
+                constructor/environment URLs do not start a shared server.
                 Pass an explicit bool to override.
             proxy_address: Proxy/smart wallet address (optional).
             signature_type: Signature type for venues that need it (optional).
@@ -403,6 +404,8 @@ class Exchange(ABC):
         effective_base_url = resolved.base_url
         self.pmxt_api_key = resolved.pmxt_api_key
         self.is_hosted = resolved.is_hosted
+        has_base_url_override = bool(base_url or os.environ.get(ENV_BASE_URL))
+        self._use_sidecar_lock_base_url = not self.is_hosted and not has_base_url_override
 
         # Bridge private_key -> EthAccountSigner for hosted trading mode.
         # Lazy import keeps the eth-account dep optional.
@@ -418,9 +421,9 @@ class Exchange(ABC):
         if self.pmxt_api_key and self.exchange_name in HOSTED_TRADING_VENUES:
             self.escrow = Escrow(self)
 
-        # Default auto_start_server: true locally, false when hosted.
+        # Only the implicit local default starts a shared sidecar automatically.
         if auto_start_server is None:
-            auto_start_server = not self.is_hosted
+            auto_start_server = self._use_sidecar_lock_base_url
 
         # Initialize server manager against the resolved URL so lock-file
         # lookups still work when pointing at the local sidecar.
@@ -433,8 +436,9 @@ class Exchange(ABC):
 
                 # Get the actual port the server is running on
                 # (may differ from default if default port was busy)
-                actual_port = self._server_manager.get_running_port()
-                effective_base_url = f"http://localhost:{actual_port}"
+                if self._use_sidecar_lock_base_url:
+                    actual_port = self._server_manager.get_running_port()
+                    effective_base_url = f"http://localhost:{actual_port}"
 
             except Exception as e:
                 raise PmxtError(
@@ -529,12 +533,11 @@ class Exchange(ABC):
         The local sidecar may pick a different port on restart (e.g. if
         the previous port is still held by a zombie process), so we
         re-read the lock file on every request instead of trusting the
-        ``configuration.host`` captured at SDK construction time. When
-        running hosted (``pmxt_api_key`` set) or against an explicit
-        remote URL, the server manager has no lock file and we fall
-        back to the configured host.
+        ``configuration.host`` captured at SDK construction time. Explicit
+        constructor/environment URLs always keep their configured target;
+        only the implicit local default follows the owned server lock.
         """
-        if self.is_hosted:
+        if not self._use_sidecar_lock_base_url:
             return self._api_client.configuration.host
         server_info = self._server_manager.get_server_info()
         if server_info and 'port' in server_info:
