@@ -25,13 +25,15 @@ npm run generate  # regenerates all SDK clients from the OpenAPI spec
 npm test          # runs the full verification suite
 ```
 
-Prepare the Python test environment before running root `npm test`:
+Prepare the generated SDK clients and Python test environment before running root `npm test` (the generated clients are not checked in):
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e './sdks/python[dev,hosted]' httpx websockets
 npm ci --ignore-scripts
+npm run generate:sdk:python --workspace=pmxt-core
+npm run generate:sdk:typescript --workspace=pmxt-core
+python -m pip install -e './sdks/python[dev,hosted]' httpx websockets
 npm test
 ```
 
