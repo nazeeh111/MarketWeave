@@ -68,3 +68,26 @@ def test_websocket_override_uses_its_actual_endpoint(monkeypatch, make_client, u
     monkeypatch.setattr(ws_module, 'SidecarWsClient', FakeSocket)
     client, _ = make_client('http://127.0.0.1:3847', websocket={'wsUrl': url})
     assert client._get_or_create_ws().access_token == expected
+
+
+def test_request_does_not_send_new_port_token_to_its_old_target(make_client):
+    from types import SimpleNamespace
+
+    client, manager = make_client()
+    manager.get_server_info.side_effect = [
+        {'port': 3847, 'accessToken': 'synthetic-old'},
+        {'port': 3848, 'accessToken': 'synthetic-new'},
+        {'port': 3848, 'accessToken': 'synthetic-new'},
+    ]
+    client._api_client.call_api = Mock(return_value=SimpleNamespace(
+        read=lambda: None, data=b'{"success":true,"data":[]}', status=200))
+    assert client.fetch_markets(limit=1) == []
+    request = client._api_client.call_api.call_args.kwargs
+    assert request['url'].startswith('http://localhost:3847/')
+    assert 'x-pmxt-access-token' not in request['header_params']
+
+
+def test_explicit_port_zero_does_not_borrow_port_eighty_token(make_client):
+    client, manager = make_client('http://localhost:0')
+    manager.get_server_info.return_value = {'port': 80, 'accessToken': 'synthetic-port-80'}
+    assert 'x-pmxt-access-token' not in client._get_auth_headers()

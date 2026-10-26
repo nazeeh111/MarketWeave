@@ -47,3 +47,16 @@ test.each([
   const tokenFor = manager.getAccessToken.bind(manager) as (url?: string) => string | undefined;
   expect(tokenFor(target)).toBe(expected);
 });
+
+test("request does not send a new port's token to its old target", async () => {
+  jest.spyOn(ServerManager.prototype as any, "getServerInfo")
+    .mockReturnValueOnce({ port: 3847, accessToken: "synthetic-old" })
+    .mockReturnValue({ port: 3848, accessToken: "synthetic-new" });
+  const wire = jest.spyOn(global, "fetch").mockResolvedValue(
+    new Response('{"success":true,"data":[]}', { status: 200 }));
+  const client = new ProbeClient({ autoStartServer: false });
+  expect(await client.fetchMarkets({ limit: 1 })).toEqual([]);
+  expect(String(wire.mock.calls[0][0])).toMatch(/^http:\/\/localhost:3847\//);
+  const headers = new Headers(wire.mock.calls[0][1]?.headers);
+  expect(headers.has("x-pmxt-access-token")).toBe(false);
+});

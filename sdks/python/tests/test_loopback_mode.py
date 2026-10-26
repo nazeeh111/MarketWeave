@@ -64,3 +64,29 @@ def test_implicit_default_still_uses_owned_server_lock(monkeypatch):
     client = client_module.Exchange('mock')
     assert client._resolve_sidecar_host() == 'http://localhost:3848'
     manager.ensure_server_running.assert_called_once()
+
+
+@pytest.mark.parametrize('mode', ['argument', 'environment', 'implicit'])
+@pytest.mark.parametrize('auto_start', [None, False, True])
+def test_connection_retry_respects_startup_ownership(monkeypatch, mode, auto_start):
+    import pmxt.client as client_module
+    from unittest.mock import Mock
+
+    monkeypatch.delenv('PMXT_API_KEY', raising=False)
+    monkeypatch.delenv('PMXT_BASE_URL', raising=False)
+    monkeypatch.setattr(client_module.time, 'sleep', lambda _: None)
+    manager = Mock()
+    manager.get_server_info.return_value = {'port': 3847}
+    manager.get_running_port.return_value = 3847
+    monkeypatch.setattr(client_module, 'ServerManager', lambda *_: manager)
+    kwargs = {'auto_start_server': auto_start}
+    if mode == 'argument':
+        kwargs['base_url'] = 'http://127.0.0.1:49152'
+    elif mode == 'environment':
+        monkeypatch.setenv('PMXT_BASE_URL', 'http://127.0.0.1:49152')
+    client = client_module.Exchange('mock', **kwargs)
+    manager.ensure_server_running.reset_mock()
+    request = Mock(side_effect=[ConnectionError('synthetic refusal'), 'success'])
+    assert client._fetch_with_retry(request) == 'success'
+    assert request.call_count == 2
+    assert manager.ensure_server_running.call_count == int(mode == 'implicit' and auto_start is not False)
