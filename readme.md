@@ -66,4 +66,4 @@ The normalizer checks use recorded inputs. Live exchange and account tests are s
 
 ## Licensing
 
-First-party source is available under the [MIT project license](LICENSE) and [MIT core license](core/LICENSE), held by nazeeh111. Separately owned dependency notices remain in effect.
+The retained implementation and MarketWeave additions are covered by the [MIT project license](LICENSE) and [MIT core license](core/LICENSE). [NOTICE](NOTICE) identifies the source and separate copyright holders. Dependency notices remain in effect.
