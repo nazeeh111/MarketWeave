@@ -25,6 +25,18 @@ npm run generate  # regenerates all SDK clients from the OpenAPI spec
 npm test          # runs the full verification suite
 ```
 
+Prepare the Python test environment before running root `npm test`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e './sdks/python[dev,hosted]' httpx websockets
+npm ci --ignore-scripts
+npm test
+```
+
+Verification uses the prepared dependencies and does not install packages or start a shared server. It builds the core, runs its tests, then runs both SDK suites. Python integration tests use a mock exchange and their own disposable localhost sidecar. A failed required stage or missing test suite fails the command; individual skipped tests remain visible in its output. To check the verification runner itself without dependencies or market services, run `python3 scripts/tests/test_verify_all.py`.
+
 If you need to run a script in a specific workspace directly:
 
 ```bash
