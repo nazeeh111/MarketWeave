@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from typing import Mapping, NamedTuple, Optional
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 #: The hosted pmxt production endpoint.
 #:
@@ -42,6 +43,22 @@ class ResolvedBaseUrl(NamedTuple):
     is_hosted: bool
 
 
+def _is_local_sidecar_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+        # Accessing port also rejects malformed or out-of-range port values.
+        parsed.port
+        return (
+            parsed.scheme in ("http", "https")
+            and parsed.hostname in ("localhost", "127.0.0.1", "::1")
+            and parsed.path in ("", "/")
+            and not parsed.query and not parsed.fragment
+            and parsed.username is None and parsed.password is None
+        )
+    except ValueError:
+        return False
+
+
 def resolve_pmxt_base_url(
     base_url: Optional[str] = None,
     pmxt_api_key: Optional[str] = None,
@@ -58,17 +75,17 @@ def resolve_pmxt_base_url(
     4. Otherwise, :data:`LOCAL_URL`.
 
     The returned ``is_hosted`` flag is ``True`` iff the resolved URL is
-    anything other than the local sidecar default.
+    anything other than a root HTTP(S) loopback sidecar URL.
     """
     environ: Mapping[str, str] = env if env is not None else os.environ
     resolved_key = pmxt_api_key or environ.get(ENV_API_KEY) or None
 
     if base_url:
-        return ResolvedBaseUrl(base_url, resolved_key, base_url != LOCAL_URL)
+        return ResolvedBaseUrl(base_url, resolved_key, not _is_local_sidecar_url(base_url))
 
     env_base = environ.get(ENV_BASE_URL)
     if env_base:
-        return ResolvedBaseUrl(env_base, resolved_key, env_base != LOCAL_URL)
+        return ResolvedBaseUrl(env_base, resolved_key, not _is_local_sidecar_url(env_base))
 
     if resolved_key:
         return ResolvedBaseUrl(HOSTED_URL, resolved_key, True)

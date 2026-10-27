@@ -369,6 +369,7 @@ export abstract class Exchange {
     /** Sticky flag: true if the sidecar /ws endpoint is unavailable. */
     private _wsUnsupported: boolean = false;
     private readonly _useSidecarLockBaseUrl: boolean;
+    private readonly _autoStartServer: boolean;
 
     constructor(exchangeName: string, options: ExchangeOptions = {}) {
         this.exchangeName = exchangeName.toLowerCase();
@@ -387,7 +388,7 @@ export abstract class Exchange {
             baseUrl: options.baseUrl,
             pmxtApiKey: options.pmxtApiKey,
         });
-        const baseUrl = resolved.baseUrl;
+        const baseUrl = resolved.isHosted ? resolved.baseUrl : resolved.baseUrl.replace(/\/+$/, "");
         this.pmxtApiKey = resolved.pmxtApiKey;
         this.isHosted = resolved.isHosted;
         const hasBaseUrlOverride = Boolean(
@@ -417,11 +418,13 @@ export abstract class Exchange {
             this.escrow = new Escrow(this);
         }
 
-        // auto_start_server defaults: true for local, false for hosted.
+        // Only the implicit local default starts a shared sidecar automatically.
         // An explicit value in the options always wins.
         const autoStartServer = options.autoStartServer !== undefined
             ? options.autoStartServer
-            : !this.isHosted;
+            : this._useSidecarLockBaseUrl;
+
+        this._autoStartServer = autoStartServer;
 
         // Initialize server manager (no network calls happen here — the
         // constructor just stores config).
@@ -492,13 +495,11 @@ export abstract class Exchange {
         };
     }
 
-    protected getAuthHeaders(): Record<string, string> {
+    protected getAuthHeaders(target: string = this.resolveBaseUrl()): Record<string, string> {
         const headers: Record<string, string> = { ...(this.config.headers as Record<string, string>) };
 
-        // Local sidecar access token (read from the lock file). Only
-        // meaningful when talking to a local sidecar we spawned
-        // ourselves; harmless elsewhere.
-        const accessToken = this.serverManager.getAccessToken();
+        // Local lock credentials must belong to the actual loopback target.
+        const accessToken = this.serverManager.getAccessToken(target);
         if (accessToken) {
             headers['x-pmxt-access-token'] = accessToken;
         }
@@ -574,7 +575,7 @@ export abstract class Exchange {
                 if (attempt >= delays.length) break;
 
                 // Connection failed — try to restart the sidecar on first failure
-                if (attempt === 0 && !this.isHosted) {
+                if (attempt === 0 && this._useSidecarLockBaseUrl && this._autoStartServer) {
                     try {
                         await this.serverManager.ensureServerRunning();
                     } catch (err) {
@@ -600,7 +601,7 @@ export abstract class Exchange {
         const host = this.resolveBaseUrl();
         const accessToken = this.isHosted
             ? this.pmxtApiKey
-            : this.serverManager.getAccessToken();
+            : this.serverManager.getAccessToken(this._websocketConfig?.wsUrl || host);
         const authParamName = this.isHosted ? "apiKey" : "token";
 
         const client = new SidecarWsClient(host, accessToken || undefined, authParamName, this._websocketConfig);
@@ -766,7 +767,7 @@ export abstract class Exchange {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    ...this.getAuthHeaders()
+                    ...this.getAuthHeaders(url)
                 },
                 body: JSON.stringify(requestBody)
             });
@@ -820,7 +821,7 @@ export abstract class Exchange {
             const getUrl = qs ? `${baseUrl}?${qs}` : baseUrl;
             const response = await this.fetchWithRetry(getUrl, {
                 method: 'GET',
-                headers: this.getAuthHeaders(),
+                headers: this.getAuthHeaders(getUrl),
             });
 
             // 404 / 405 => older sidecar without GET dispatch. Remember
@@ -844,7 +845,7 @@ export abstract class Exchange {
         // POST fallback — identical to the original per-method template.
         const response = await this.fetchWithRetry(baseUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(baseUrl) },
             body: JSON.stringify({ args, credentials: this.getCredentials() }),
         });
         if (!response.ok) {
@@ -864,9 +865,10 @@ export abstract class Exchange {
      * never use the GET read path.
      */
     protected async sidecarPostRequest(methodName: string, args: unknown[]): Promise<any> {
-        const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/${methodName}`, {
+        const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/${methodName}`;
+        const response = await this.fetchWithRetry(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
             body: JSON.stringify({ args, credentials: this.getCredentials() }),
         });
         if (!response.ok) {
@@ -943,7 +945,7 @@ export abstract class Exchange {
         const url = `${this.resolveBaseUrl()}${path}${qs ? `?${qs}` : ''}`;
         const response = await this.fetchWithRetry(url, {
             method: 'GET',
-            headers: this.getAuthHeaders(),
+            headers: this.getAuthHeaders(url),
         });
         if (!response.ok) {
             const body = await response.json().catch(() => ({}));
@@ -962,9 +964,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(walletAddress);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/getAuthNonce`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/getAuthNonce`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -989,9 +992,10 @@ export abstract class Exchange {
             args.push(walletAddress);
             args.push(signature);
             args.push(nonce);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/loginWithSignature`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/loginWithSignature`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1014,9 +1018,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (walletAddress !== undefined) args.push(walletAddress);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/logout`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/logout`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1039,9 +1044,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(walletAddress);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/isSessionActive`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/isSessionActive`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1064,9 +1070,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(reload);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/loadMarkets`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/loadMarkets`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1094,9 +1101,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarkets`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarkets`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1120,9 +1128,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarketsPaginated`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarketsPaginated`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1150,9 +1159,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEventsPaginated`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEventsPaginated`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1180,9 +1190,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEvents`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEvents`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1206,9 +1217,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchSeries`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchSeries`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1232,9 +1244,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarket`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarket`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1258,9 +1271,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEvent`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEvent`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1284,9 +1298,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(eventTicker);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEventMetadata`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEventMetadata`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1314,9 +1329,10 @@ export abstract class Exchange {
                 if (limit === undefined) args.push(null);
                 args.push(params);
             }
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOrderBook`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOrderBook`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1343,9 +1359,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(outcomeIds.map(resolveOutcomeId));
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOrderBooks`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOrderBooks`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1376,9 +1393,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(built);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/submitOrder`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/submitOrder`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1405,9 +1423,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(orderId);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/cancelOrder`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/cancelOrder`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1440,9 +1459,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(orderId);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOrder`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOrder`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1478,9 +1498,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (marketId !== undefined) args.push(marketId);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOpenOrders`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchOpenOrders`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1512,9 +1533,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMyTrades`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMyTrades`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1541,9 +1563,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchClosedOrders`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchClosedOrders`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1570,9 +1593,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchAllOrders`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchAllOrders`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1606,9 +1630,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (address !== undefined) args.push(address);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchPositions`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchPositions`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1642,9 +1667,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (address !== undefined) args.push(address);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchBalance`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchBalance`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1668,9 +1694,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(resolveOutcomeId(outcomeId));
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/unwatchOrderBook`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/unwatchOrderBook`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1693,9 +1720,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(address);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/unwatchAddress`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/unwatchAddress`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1717,9 +1745,10 @@ export abstract class Exchange {
         await this.initPromise;
         try {
             const args: any[] = [];
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/close`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/close`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1742,9 +1771,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarketMatches`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMarketMatches`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1767,9 +1797,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMatches`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMatches`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1792,9 +1823,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEventMatches`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchEventMatches`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1817,9 +1849,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/compareMarketPrices`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/compareMarketPrices`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1842,9 +1875,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchRelatedMarkets`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchRelatedMarkets`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1867,9 +1901,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMatchedMarkets`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMatchedMarkets`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1892,9 +1927,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMatchedPrices`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchMatchedPrices`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1917,9 +1953,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchHedges`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchHedges`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -1942,9 +1979,10 @@ export abstract class Exchange {
         try {
             const args: any[] = [];
             if (params !== undefined) args.push(params);
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchArbitrage`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/fetchArbitrage`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -2302,9 +2340,10 @@ export abstract class Exchange {
             if (types !== undefined) {
                 args.push(types);
             }
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/watchAddress`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/watchAddress`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args, credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -2419,9 +2458,10 @@ export abstract class Exchange {
                 paramsDict.onBehalfOf = params.onBehalfOf;
             }
 
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/buildOrder`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/buildOrder`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args: [paramsDict], credentials: this.getCredentials() }),
             });
             if (!response.ok) {
@@ -2445,9 +2485,10 @@ export abstract class Exchange {
         if (!this._accountDiscoveryPromise) {
             this._accountDiscoveryPromise = (async () => {
                 try {
+                    const url = `${this.resolveBaseUrl()}/v0/account`;
                     const res = await this.fetchWithRetry(
-                        `${this.resolveBaseUrl()}/v0/account`,
-                        { method: 'GET', headers: { ...this.getAuthHeaders() } },
+                        url,
+                        { method: 'GET', headers: { ...this.getAuthHeaders(url) } },
                     );
                     if (res.ok) {
                         const body = await res.json();
@@ -2465,9 +2506,10 @@ export abstract class Exchange {
     private async _executeSorOrder(params: any): Promise<Order> {
         await this._discoverHostedAccount();
 
-        const buildRes = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/sor/buildOrder`, {
+        const buildResUrl = `${this.resolveBaseUrl()}/api/sor/buildOrder`;
+        const buildRes = await this.fetchWithRetry(buildResUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(buildResUrl) },
             body: JSON.stringify({ args: [params] }),
         });
         if (!buildRes.ok) throw new PmxtError(`buildOrder failed: ${await buildRes.text()}`);
@@ -2497,9 +2539,10 @@ export abstract class Exchange {
             }
         }
 
-        const submitRes = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/sor/submitOrder`, {
+        const submitResUrl = `${this.resolveBaseUrl()}/api/sor/submitOrder`;
+        const submitRes = await this.fetchWithRetry(submitResUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+            headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(submitResUrl) },
             body: JSON.stringify({ args: [{ orderId, fills }] }),
         });
         if (!submitRes.ok) throw new PmxtError(`submitOrder failed: ${await submitRes.text()}`);
@@ -2863,9 +2906,10 @@ export abstract class Exchange {
                 paramsDict.onBehalfOf = params.onBehalfOf;
             }
 
-            const response = await this.fetchWithRetry(`${this.resolveBaseUrl()}/api/${this.exchangeName}/createOrder`, {
+            const url = `${this.resolveBaseUrl()}/api/${this.exchangeName}/createOrder`;
+            const response = await this.fetchWithRetry(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders(url) },
                 body: JSON.stringify({ args: [paramsDict], credentials: this.getCredentials() }),
             });
             if (!response.ok) {

@@ -898,3 +898,9 @@ class TestFetchBalanceViaSdk:
         balances = mock_exchange.fetch_balance()
         currencies = [b.currency for b in balances]
         assert "USDC" in currencies
+
+
+def test_explicit_loopback_base_url_with_trailing_slash(sidecar_port):
+    client = _MockExchangeClient(f"http://127.0.0.1:{sidecar_port}/")
+    balances = client.fetch_balance()
+    assert any(balance.currency == "USDC" for balance in balances)

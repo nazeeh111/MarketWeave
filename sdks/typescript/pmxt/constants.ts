@@ -33,6 +33,18 @@ export const ENV = {
     API_KEY: "PMXT_API_KEY",
 } as const;
 
+function isLocalSidecarUrl(value: string): boolean {
+    try {
+        const url = new URL(value);
+        return ["http:", "https:"].includes(url.protocol)
+            && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+            && url.pathname === "/" && !url.search && !url.hash
+            && !url.username && !url.password;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Resolve the effective base URL for an SDK client, following the
  * documented precedence rules:
@@ -44,7 +56,7 @@ export const ENV = {
  *   4. Otherwise, default to {@link LOCAL_URL}.
  *
  * Returns both the resolved URL and an `isHosted` flag (true iff the
- * resolved URL is anything other than the local sidecar default).
+ * resolved URL is anything other than a root HTTP(S) loopback sidecar URL).
  */
 export function resolvePmxtBaseUrl(args: {
     baseUrl?: string;
@@ -57,7 +69,7 @@ export function resolvePmxtBaseUrl(args: {
     const pick = (url: string) => ({
         baseUrl: url,
         pmxtApiKey,
-        isHosted: url !== LOCAL_URL,
+        isHosted: !isLocalSidecarUrl(url),
     });
 
     if (args.baseUrl) return pick(args.baseUrl);

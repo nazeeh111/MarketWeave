@@ -11,6 +11,7 @@ import re
 import sys
 import time
 import urllib.error
+from urllib.parse import urlsplit
 import uuid
 from abc import ABC
 from datetime import datetime
@@ -59,7 +60,7 @@ from .models import (
     PriceComparison,
     ArbitrageOpportunity,
 )
-from .constants import LOCAL_URL, resolve_pmxt_base_url
+from .constants import ENV_BASE_URL, LOCAL_URL, resolve_pmxt_base_url
 from .errors import (
     InvalidOrder,
     InvalidSignature,
@@ -349,7 +350,8 @@ class Exchange(ABC):
                 presence of ``pmxt_api_key`` (implying the hosted endpoint),
                 then falling back to the local sidecar default.
             auto_start_server: When True, start the local sidecar on demand.
-                Defaults to True for local mode and False for hosted mode.
+                Defaults to True only for the implicit local default; explicit
+                constructor/environment URLs do not start a shared server.
                 Pass an explicit bool to override.
             proxy_address: Proxy/smart wallet address (optional).
             signature_type: Signature type for venues that need it (optional).
@@ -400,9 +402,11 @@ class Exchange(ABC):
             base_url=base_url,
             pmxt_api_key=pmxt_api_key,
         )
-        effective_base_url = resolved.base_url
+        effective_base_url = resolved.base_url.rstrip("/") if not resolved.is_hosted else resolved.base_url
         self.pmxt_api_key = resolved.pmxt_api_key
         self.is_hosted = resolved.is_hosted
+        has_base_url_override = bool(base_url or os.environ.get(ENV_BASE_URL))
+        self._use_sidecar_lock_base_url = not self.is_hosted and not has_base_url_override
 
         # Bridge private_key -> EthAccountSigner for hosted trading mode.
         # Lazy import keeps the eth-account dep optional.
@@ -418,9 +422,11 @@ class Exchange(ABC):
         if self.pmxt_api_key and self.exchange_name in HOSTED_TRADING_VENUES:
             self.escrow = Escrow(self)
 
-        # Default auto_start_server: true locally, false when hosted.
+        # Only the implicit local default starts a shared sidecar automatically.
         if auto_start_server is None:
-            auto_start_server = not self.is_hosted
+            auto_start_server = self._use_sidecar_lock_base_url
+
+        self._auto_start_server = auto_start_server
 
         # Initialize server manager against the resolved URL so lock-file
         # lookups still work when pointing at the local sidecar.
@@ -433,8 +439,9 @@ class Exchange(ABC):
 
                 # Get the actual port the server is running on
                 # (may differ from default if default port was busy)
-                actual_port = self._server_manager.get_running_port()
-                effective_base_url = f"http://localhost:{actual_port}"
+                if self._use_sidecar_lock_base_url:
+                    actual_port = self._server_manager.get_running_port()
+                    effective_base_url = f"http://localhost:{actual_port}"
 
             except Exception as e:
                 raise PmxtError(
@@ -512,7 +519,7 @@ class Exchange(ABC):
                     break
 
                 # Connection failed -- try to restart sidecar on first failure
-                if attempt == 0 and not self.pmxt_api_key:
+                if attempt == 0 and self._use_sidecar_lock_base_url and self._auto_start_server:
                     try:
                         self._server_manager.ensure_server_running()
                     except Exception:
@@ -529,29 +536,39 @@ class Exchange(ABC):
         The local sidecar may pick a different port on restart (e.g. if
         the previous port is still held by a zombie process), so we
         re-read the lock file on every request instead of trusting the
-        ``configuration.host`` captured at SDK construction time. When
-        running hosted (``pmxt_api_key`` set) or against an explicit
-        remote URL, the server manager has no lock file and we fall
-        back to the configured host.
+        ``configuration.host`` captured at SDK construction time. Explicit
+        constructor/environment URLs always keep their configured target;
+        only the implicit local default follows the owned server lock.
         """
-        if self.is_hosted:
+        if not self._use_sidecar_lock_base_url:
             return self._api_client.configuration.host
         server_info = self._server_manager.get_server_info()
         if server_info and 'port' in server_info:
             return f"http://localhost:{server_info['port']}"
         return self._api_client.configuration.host
 
-    def _get_auth_headers(self) -> Dict[str, str]:
-        """Build request headers with a fresh access token read from the lock file.
+    def _sidecar_access_token(self, target: str) -> Optional[str]:
+        """A global lock token belongs only to its plain loopback port."""
+        try:
+            url = urlsplit(target)
+            if (url.scheme not in ("http", "ws")
+                    or url.hostname not in ("localhost", "127.0.0.1", "::1")
+                    or url.username is not None or url.password is not None):
+                return None
+            port = 80 if url.port is None else url.port
+        except ValueError:
+            return None
+        info = self._server_manager.get_server_info()
+        if info and info.get("port") == port:
+            return info.get("accessToken")
+        return None
 
-        The token is re-read on every call so that if the sidecar server restarts
-        (and writes a new token) existing client objects automatically recover on
-        the next request — no re-instantiation required.
-        """
+    def _get_auth_headers(self, target: Optional[str] = None) -> Dict[str, str]:
+        """Bind local lock credentials to their endpoint; retain hosted bearer auth."""
         headers: Dict[str, str] = dict(self._api_client.default_headers)
-        server_info = self._server_manager.get_server_info()
-        if server_info and 'accessToken' in server_info:
-            headers['x-pmxt-access-token'] = server_info['accessToken']
+        access_token = self._sidecar_access_token(target if target is not None else self._resolve_sidecar_host())
+        if access_token:
+            headers['x-pmxt-access-token'] = access_token
         if self.pmxt_api_key:
             headers['Authorization'] = f'Bearer {self.pmxt_api_key}'
         return headers
@@ -1121,7 +1138,7 @@ class Exchange(ABC):
             qs = self._build_sidecar_query_string(query)
             get_url = f"{base_url}?{qs}" if qs else base_url
             headers = {"Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(get_url))
             try:
                 response = self._fetch_with_retry(
                     lambda: self._api_client.call_api(
@@ -1149,7 +1166,7 @@ class Exchange(ABC):
         if creds:
             body["credentials"] = creds
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        headers.update(self._get_auth_headers())
+        headers.update(self._get_auth_headers(base_url))
         try:
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(
@@ -1182,7 +1199,7 @@ class Exchange(ABC):
             try:
                 url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/has"
                 headers = {"Accept": "application/json"}
-                headers.update(self._get_auth_headers())
+                headers.update(self._get_auth_headers(url))
                 response = self._fetch_with_retry(
                     lambda: self._api_client.call_api(
                         method="GET",
@@ -1208,7 +1225,7 @@ class Exchange(ABC):
             if creds:
                 body["credentials"] = creds
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(
                     method="POST",
@@ -1248,7 +1265,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(
@@ -1316,7 +1333,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/getAuthNonce"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1338,7 +1355,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/loginWithSignature"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1359,7 +1376,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/logout"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1378,7 +1395,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/isSessionActive"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1401,7 +1418,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMarkets"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1424,7 +1441,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMarketsPaginated"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1451,7 +1468,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchEventsPaginated"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1478,7 +1495,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchEvents"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1501,7 +1518,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchSeries"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1526,7 +1543,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMarket"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1549,7 +1566,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchEvent"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1569,7 +1586,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchEventMetadata"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1598,7 +1615,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchOrderBook"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1620,7 +1637,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchOrderBooks"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1642,7 +1659,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/cancelOrder"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1668,7 +1685,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchOrder"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1699,7 +1716,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchOpenOrders"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1729,7 +1746,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMyTrades"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1758,7 +1775,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchClosedOrders"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1787,7 +1804,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchAllOrders"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1815,7 +1832,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchPositions"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1843,7 +1860,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchBalance"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1862,7 +1879,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/unwatchOrderBook"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1881,7 +1898,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/unwatchAddress"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1899,7 +1916,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/close"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1921,7 +1938,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMarketMatches"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1943,7 +1960,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMatches"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1966,7 +1983,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchEventMatches"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -1988,7 +2005,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/compareMarketPrices"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -2010,7 +2027,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchRelatedMarkets"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -2033,7 +2050,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMatchedMarkets"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -2056,7 +2073,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchMatchedPrices"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -2078,7 +2095,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchHedges"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -2101,7 +2118,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/fetchArbitrage"
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
             response = self._fetch_with_retry(
                 lambda: self._api_client.call_api(method="POST", url=url, body=body, header_params=headers)
             )
@@ -2478,10 +2495,8 @@ class Exchange(ABC):
             if self.is_hosted:
                 client = SidecarWsClient(host, api_key=self.pmxt_api_key, config=self.websocket)
             else:
-                server_info = self._server_manager.get_server_info()
-                access_token = (
-                    server_info.get("accessToken") if server_info else None
-                )
+                target = (self.websocket or {}).get("wsUrl") or host
+                access_token = self._sidecar_access_token(target)
                 client = SidecarWsClient(host, access_token=access_token, config=self.websocket)
             try:
                 # Trigger connection to validate the endpoint exists
@@ -2831,7 +2846,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/watchAddress"
             response = self._fetch_with_retry(
@@ -2868,7 +2883,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/unwatchAddress"
             response = self._fetch_with_retry(
@@ -2904,7 +2919,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/watchPrices"
             response = self._fetch_with_retry(
@@ -2940,7 +2955,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/watchUserPositions"
             response = self._fetch_with_retry(
@@ -2977,7 +2992,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/watchUserTransactions"
             response = self._fetch_with_retry(
@@ -3038,9 +3053,10 @@ class Exchange(ABC):
         if not hasattr(self, "_hosted_account_cache"):
             import requests as _req
             try:
+                url = f"{self._resolve_sidecar_host()}/v0/account"
                 resp = _req.get(
-                    f"{self._resolve_sidecar_host()}/v0/account",
-                    headers=self._get_auth_headers(),
+                    url,
+                    headers=self._get_auth_headers(url),
                     timeout=10,
                 )
                 self._hosted_account_cache = resp.json() if resp.ok else {}
@@ -3069,7 +3085,7 @@ class Exchange(ABC):
             params["onBehalfOf"] = kwargs["on_behalf_of"]
         params = {k: v for k, v in params.items() if v is not None}
 
-        build_resp = _req.post(f"{host}/api/sor/buildOrder", headers={"Content-Type": "application/json", **self._get_auth_headers()}, json={"args": [params]}, timeout=30)
+        build_resp = _req.post(f"{host}/api/sor/buildOrder", headers={"Content-Type": "application/json", **self._get_auth_headers(f"{host}/api/sor/buildOrder")}, json={"args": [params]}, timeout=30)
         if not build_resp.ok:
             raise PmxtError(f"buildOrder failed: {build_resp.text}")
         build_data = build_resp.json().get("data", build_resp.json())
@@ -3094,7 +3110,7 @@ class Exchange(ABC):
             except Exception as e:
                 fills.append({"venue": leg["venue"], "venueMarketId": leg.get("venueMarketId"), "venueOutcomeId": leg.get("venueOutcomeId"), "shares": leg["shares"], "price": leg["price"], "status": "failed", "error": str(e)})
 
-        submit_resp = _req.post(f"{host}/api/sor/submitOrder", headers={"Content-Type": "application/json", **self._get_auth_headers()}, json={"args": [{"orderId": order_id, "fills": fills}]}, timeout=30)
+        submit_resp = _req.post(f"{host}/api/sor/submitOrder", headers={"Content-Type": "application/json", **self._get_auth_headers(f"{host}/api/sor/submitOrder")}, json={"args": [{"orderId": order_id, "fills": fills}]}, timeout=30)
         if not submit_resp.ok:
             raise PmxtError(f"submitOrder failed: {submit_resp.text}")
         data = submit_resp.json().get("data", submit_resp.json())
@@ -3249,7 +3265,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/createOrder"
             response = self._fetch_with_retry(
@@ -3392,7 +3408,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/buildOrder"
             response = self._fetch_with_retry(
@@ -3460,7 +3476,7 @@ class Exchange(ABC):
                 body["credentials"] = creds
 
             headers = {"Content-Type": "application/json", "Accept": "application/json"}
-            headers.update(self._get_auth_headers())
+            headers.update(self._get_auth_headers(url))
 
             url = f"{self._resolve_sidecar_host()}/api/{self.exchange_name}/submitOrder"
             response = self._fetch_with_retry(
