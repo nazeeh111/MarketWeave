@@ -28,11 +28,7 @@ npm run build --workspace=pmxtjs
 
 Package names (`pmxt-core`, `pmxtjs`, `pmxt`) and command names are retained as compatibility interfaces. No new registry packages are required for this source checkout. Existing response fields, calculations, transport routes and venue credentials retain their established meanings.
 
-## Follow one market through the workspace
-
-The venue adapter reads the provider payload, the core maps it into shared market and order-book models, and the SDK or CLI exposes those models. Use the feature matrix to check a specific operation before choosing a venue. Execution-price estimates describe the supplied order book; they do not guarantee a fill.
-
-## Data path
+## Follow the data
 
 ```text
 Venue payloads → Exchange adapters → Unified models → SDK / local API / CLI
@@ -40,7 +36,7 @@ Venue payloads → Exchange adapters → Unified models → SDK / local API / CL
                                 Execution-price estimates
 ```
 
-The core normalizes venue data; the SDKs expose that shared model. Hosting and venue access still depend on the configured services. Start with local examples and public data before supplying account credentials.
+The adapters map venue payloads into shared market and order-book models. Check the [feature matrix](core/COMPLIANCE.md) before choosing a venue or operation. Execution-price estimates describe the supplied order book; they do not guarantee a fill. Hosting and venue access depend on the configured services. Start with local examples and public data before supplying account credentials.
 
 ### Venue adapters
 
